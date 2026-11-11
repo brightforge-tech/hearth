@@ -124,6 +124,9 @@ const ANY = Object.freeze({ role: 'any' });
 const ADMIN = Object.freeze({ role: 'admin' });
 // admin + moderator (billing / front office): the finance tables.
 const FINANCE = Object.freeze({ role: 'roles', roles: Object.freeze(['admin', 'moderator']) });
+// admin, or any staff account with the Doctor tag (user_roles.is_doctor): the
+// clinical record. Front-desk and billing staff never read visit notes.
+const clinical = (staff) => Object.freeze({ role: 'clinical', staff });
 
 // staffScope(using, check?): the two fragments of a staff-narrowed policy.
 const staffScope = (using, check = null) => Object.freeze({ using: [using], check: check ? [check] : [using] });
@@ -147,10 +150,11 @@ export const POLICIES = Object.freeze({
     select: ANY, insert: ANY, update: ANY, delete: ANY,
   }),
   visit_notes: Object.freeze({
-    // 20250812130142
-    select: Object.freeze({ role: 'any', staff: staffScope(appointmentExists()) }),
-    insert: Object.freeze({ role: 'any', staff: staffScope(appointmentExists()) }),
-    update: Object.freeze({ role: 'any', staff: staffScope(appointmentExists()) }),
+    // Narrower than the hosted policy (which let any staff session in): only
+    // admins and doctors, and a doctor's rows must still have an appointment.
+    select: clinical(staffScope(appointmentExists())),
+    insert: clinical(staffScope(appointmentExists())),
+    update: clinical(staffScope(appointmentExists())),
     delete: ADMIN,
   }),
   services: Object.freeze({
@@ -239,6 +243,10 @@ export function isAdmin(user) {
   return Boolean(user && Array.isArray(user.roles) && user.roles.includes('admin'));
 }
 
+export function isDoctor(user) {
+  return Boolean(user && user.is_doctor === true && Array.isArray(user.roles) && user.roles.length > 0);
+}
+
 export function isStaff(user) {
   return Boolean(user && Array.isArray(user.roles) && user.roles.length > 0 && !isAdmin(user));
 }
@@ -251,6 +259,7 @@ export function can(user, table, verb) {
   if (!user || !user.id) return false;
   if (policy.role === 'admin') return isAdmin(user);
   if (policy.role === 'roles') return Array.isArray(user.roles) && user.roles.some((r) => policy.roles.includes(r));
+  if (policy.role === 'clinical') return isAdmin(user) || isDoctor(user);
   return true; // 'any' and 'self' both just need a session (roles already checked)
 }
 
@@ -346,7 +355,29 @@ export function denyReason(user, table, verb) {
   if (policy.role === 'admin') return `${table} ${verb} needs the admin role`;
   if (policy.role === 'roles') return `${table} ${verb} needs one of the roles ${policy.roles.join(', ')}`;
   if (policy.role === 'self') return `${table} ${verb} is limited to your own rows`;
+  if (policy.role === 'clinical') return `${table} ${verb} needs the admin role or the Doctor tag`;
   return `${table} ${verb} is not permitted for this account`;
 }
 
-export default { can, predicate, readPredicate, streamPredicate, anonAllow, anonPredicate, denyReason, POLICIES, TABLES, VERBS };
+// embedPredicate(user, table, alias): the row restriction for a table pulled
+// in as an embedded resource (`appointments(visit_notes(...))`). Postgres RLS
+// applied to embedded tables in the hosted app; here the embed must pass the
+// same can() check as a root read and carries the same row predicate, so an
+// embed can never reach rows a direct read of that table would not. Returns
+// {sql} (possibly empty) or {denied: reason}.
+export function embedPredicate(user, table, alias) {
+  if (!user) {
+    if (!anonAllow(table, 'select')) return { denied: `${table} cannot be embedded without a session` };
+    const anon = anonPredicate(table, 'select', alias);
+    return { sql: anon ? anon.sql : '' };
+  }
+  if (!can(user, table, 'select')) return { denied: denyReason(user, table, 'select') };
+  const pred = predicate(user, table, 'select', { alias, when: 'using' });
+  if (!pred) return { sql: '' };
+  // Embeds are built without a parameter list; a policy that needs one
+  // (user_roles' own-rows scope) is read directly, never embedded.
+  if (pred.params.length > 0) return { denied: `${table} cannot be embedded; read it directly` };
+  return { sql: pred.sql };
+}
+
+export default { can, embedPredicate, predicate, readPredicate, streamPredicate, anonAllow, anonPredicate, denyReason, POLICIES, TABLES, VERBS };

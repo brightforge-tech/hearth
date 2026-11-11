@@ -481,7 +481,7 @@ export default [
         verb: 'upsert',
         payload: { appointment_id: ID.appt1, notes: 'first pass' },
         onConflict: 'appointment_id',
-      }, tokens.staff));
+      }, tokens.admin));
       assert.equal(first.length, 1);
       assert.equal(first[0].notes, 'first pass');
 
@@ -490,7 +490,7 @@ export default [
         verb: 'upsert',
         payload: { appointment_id: ID.appt1, notes: 'second pass' },
         onConflict: 'appointment_id',
-      }, tokens.staff));
+      }, tokens.admin));
       assert.equal(second[0].id, first[0].id); // same row, updated — not a second row
       assert.equal(second[0].notes, 'second pass');
       const count = await db.query('select count(*)::int as n from public.visit_notes where appointment_id = $1', [ID.appt1]);
@@ -502,7 +502,7 @@ export default [
         verb: 'upsert',
         payload: { appointment_id: ID.appt1, notes: 'nope' },
         onConflict: 'notes',
-      }, tokens.staff), 400, 'BAD_CONFLICT');
+      }, tokens.admin), 400, 'BAD_CONFLICT');
     }),
   },
   {

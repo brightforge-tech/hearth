@@ -139,16 +139,18 @@ const MATRIX = {
     delete: { body: { filters: { id: ID.apptThrow }, select: 'id' }, expect: { anonymous: 401, staff: 200, admin: 200 } },
   },
   visit_notes: {
-    select: { body: {}, expect: { anonymous: 401, staff: 200, admin: 200 } },
+    // Hearth: clinical notes need admin or the Doctor tag; plain staff get 403
+    // (tests/api/clinical-notes.test.mjs covers the doctor-tagged caller).
+    select: { body: {}, expect: { anonymous: 401, staff: 403, admin: 200 } },
     insert: {
       body: null, // appointment differs per caller (unique appointment_id): see bodyFor below
       bodyFor: {
         staff: { payload: { appointment_id: ID.apptStaffNote, notes: 'staff note' }, select: 'id' },
         admin: { payload: { appointment_id: ID.apptAdminNote, notes: 'admin note' }, select: 'id' },
       },
-      expect: { anonymous: 401, staff: 200, admin: 200 },
+      expect: { anonymous: 401, staff: 403, admin: 200 },
     },
-    update: { body: { payload: { notes: 'edited' }, filters: { id: ID.throwNote }, select: 'id' }, expect: { anonymous: 401, staff: 200, admin: 200 } },
+    update: { body: { payload: { notes: 'edited' }, filters: { id: ID.throwNote }, select: 'id' }, expect: { anonymous: 401, staff: 403, admin: 200 } },
     delete: { body: { filters: { id: ID.throwNote }, select: 'id' }, expect: { anonymous: 401, staff: 403, admin: 200 } }, // 20250812130142: admin-only delete
   },
   services: {

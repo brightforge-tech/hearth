@@ -15,6 +15,7 @@ import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, Command
 import { Check, ChevronsUpDown, Plus } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useToast } from "@/hooks/use-toast";
+import { useAuth } from "@/hooks/useAuth";
 import { Navigation } from "@/components/Navigation";
 import { AppFooter } from "@/components/AppFooter";
 
@@ -51,6 +52,9 @@ export default function Visit() {
   const navigate = useNavigate();
   const { toast } = useToast();
   const queryClient = useQueryClient();
+  // Clinical notes are limited to admins and doctors (the API enforces this too).
+  const { isDoctor, hasRole } = useAuth();
+  const canWriteNotes = isDoctor || hasRole("admin");
 
   useMeta(
     `Visit Notes & Services | ${BRAND.name}`,
@@ -453,6 +457,14 @@ export default function Visit() {
             )}
 
             {/* Clinical Notes Card */}
+            {!canWriteNotes ? (
+              <Card>
+                <CardHeader>
+                  <CardTitle>Clinical Notes</CardTitle>
+                  <CardDescription>Only doctors and admins can read or write clinical notes.</CardDescription>
+                </CardHeader>
+              </Card>
+            ) : (
             <Card>
               <CardHeader>
                 <CardTitle>Clinical Notes</CardTitle>
@@ -488,6 +500,7 @@ export default function Visit() {
                 </div>
               </CardContent>
             </Card>
+            )}
           </div>
 
           <Card>

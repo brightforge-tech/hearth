@@ -356,8 +356,8 @@ export default [
   {
     name: 'T8.8 Visit.tsx upsert(payload, {onConflict}) pattern and a bad conflict target',
     fn: async (ctx) => withShim(ctx, async ({ db, client, signIn }) => {
-      const staff = client();
-      await signIn(staff, 'staff');
+      const staff = client(); // the Visit page's notes card is for admins and doctors
+      await signIn(staff, 'admin');
 
       const payload = { appointment_id: ID.appt1, notes: 'v1' };
       const first = await staff.from('visit_notes').upsert(payload, { onConflict: 'appointment_id' });

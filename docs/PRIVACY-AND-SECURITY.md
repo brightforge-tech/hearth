@@ -117,7 +117,9 @@ Hearth is only as safe as the server it runs on. As a minimum:
   tickets or chat. Rotating `JWT_SECRET` signs everyone out.
 - **Least privilege.** Give each person their own account with the lowest role
   that lets them work (Clinical staff, Billing/front office, Administrator).
-  Keep administrators few. Disable accounts of people who leave. Run Hearth as
+  Keep administrators few. Visit notes can be read and written only by
+  administrators and accounts with the **Doctor** tag; tag only the clinicians
+  who need them. Disable accounts of people who leave. Run Hearth as
   an unprivileged OS user (the Docker image runs as `node`).
 - **CORS and links.** Set `ALLOWED_ORIGINS` to exactly your Hearth URL and
   `APP_BASE_URL` to the same, so password-reset links point at the right site.

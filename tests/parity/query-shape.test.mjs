@@ -280,8 +280,8 @@ const QUERIES = [
     table: 'patients',
     select: ADMIN_PATIENTS,
     body: { order: [{ column: 'created_at', ascending: false }] },
-    callers: ['staff', 'admin'],
-    minRows: { admin: 2, staff: 1 }, // the ported patients policy hides Aliki from staff
+    callers: ['admin'], // an admin-only page; staff without the Doctor tag cannot embed visit_notes
+    minRows: { admin: 2 },
     spec: {
       columns: { id: s, first_name: s, last_name: s, email: s, phone: s, address: s, created_at: s },
       wild: true,

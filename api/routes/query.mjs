@@ -57,7 +57,7 @@ import express from 'express';
 
 import { query, tx } from '../db.mjs';
 import { allColumns, getCatalog, getColumn, getTable, hasTable, quoteIdent, relationship, coerceIn, CoerceError } from '../lib/catalog.mjs';
-import { anonAllow, can, denyReason, readPredicate, renumber } from '../lib/authorization.mjs';
+import { anonAllow, can, denyReason, embedPredicate, readPredicate, renumber } from '../lib/authorization.mjs';
 import { ApiError, asyncHandler, sendJson } from '../lib/http.mjs';
 import { combineAnd, compileFilters, FilterError } from '../lib/filters.mjs';
 import { MAX_DEPTH, parseSelect, SpecError } from '../lib/sql-spec.mjs';
@@ -140,7 +140,7 @@ function sqlLiteral(text) {
 // buildObject(catalog, table, alias, tree): {sql} for one level of the tree.
 // `alias` is how the row is named in the enclosing statement (the table's own
 // name at the root, the embed's alias inside a subquery).
-function buildObject(catalog, table, alias, tree) {
+function buildObject(catalog, table, alias, tree, user) {
   const parts = [];
   for (const node of tree.fields) {
     if (node.kind === 'all') {
@@ -161,14 +161,14 @@ function buildObject(catalog, table, alias, tree) {
       parts.push(`${sqlLiteral(node.alias)}, ${value}`);
       continue;
     }
-    parts.push(`${sqlLiteral(node.alias)}, ${buildEmbed(catalog, table, alias, node)}`);
+    parts.push(`${sqlLiteral(node.alias)}, ${buildEmbed(catalog, table, alias, node, user)}`);
   }
   if (parts.length === 0) throw new SpecError('the select list has no fields');
   return { sql: `json_build_object(${parts.join(', ')})` };
 }
 
 // buildEmbed: a correlated subquery reproducing PostgREST's embedded resource.
-function buildEmbed(catalog, parent, parentAlias, node) {
+function buildEmbed(catalog, parent, parentAlias, node, user) {
   const child = getTable(catalog, node.table);
   if (!child) throw badRequest(`no table ${JSON.stringify(node.table)} to embed`, 'BAD_COLUMN');
   if (node.alias === parentAlias) {
@@ -181,10 +181,14 @@ function buildEmbed(catalog, parent, parentAlias, node) {
       'BAD_RELATION'
     );
   }
-  const inner = buildObject(catalog, child, node.alias, node.children);
+  // The embedded table answers to its own role and row policy, as RLS did.
+  const policy = embedPredicate(user, node.table, node.alias);
+  if (policy.denied) throw new ApiError(403, policy.denied, 'FORBIDDEN');
+  const inner = buildObject(catalog, child, node.alias, node.children, user);
   // relationship() returns localColumn = the column on THIS table (the parent)
   // and foreignColumn = the column on the embedded table, for both directions.
-  const condition = `${ref(parentAlias, link.localColumn)} = ${ref(node.alias, link.foreignColumn)}`;
+  let condition = `${ref(parentAlias, link.localColumn)} = ${ref(node.alias, link.foreignColumn)}`;
+  if (policy.sql) condition += ` and (${policy.sql})`;
   const from = `from ${quoteIdent('public')}.${quoteIdent(node.table)} as ${quoteIdent(node.alias)}`;
 
   if (link.direction === 'toMany') {
@@ -202,8 +206,8 @@ function buildEmbed(catalog, parent, parentAlias, node) {
 // projectionSql(catalog, table, tree): the json expression for the root, with
 // the root row named after its own table — the name api/lib/authorization.mjs's
 // predicates use, so one statement carries both.
-function projectionSql(catalog, table, tree) {
-  return buildObject(catalog, table, table.name, tree).sql;
+function projectionSql(catalog, table, tree, user) {
+  return buildObject(catalog, table, table.name, tree, user).sql;
 }
 
 // validateTree: every identifier the select list names, checked against the
@@ -343,11 +347,11 @@ function onConflictColumns(catalog, table, onConflict, payloadNames) {
 
 // selectStatement: the plain read, with the policy predicate ANDed with the
 // caller's filters.
-function selectStatement({ catalog, table, tree, where, orderBy, limit, offset }) {
+function selectStatement({ catalog, table, tree, where, orderBy, limit, offset, user }) {
   // `where` is null when the policy narrows nothing and the caller filtered
   // nothing either — the plain "read the whole allow-listed table" case.
   const params = [...(where ? where.params : [])];
-  const sql = [`select ${projectionSql(catalog, table, tree)} as "hh_row"`, `from ${quoteIdent('public')}.${quoteIdent(table.name)} as ${quoteIdent(table.name)}`];
+  const sql = [`select ${projectionSql(catalog, table, tree, user)} as "hh_row"`, `from ${quoteIdent('public')}.${quoteIdent(table.name)} as ${quoteIdent(table.name)}`];
   if (where && where.sql) sql.push(`where ${where.sql}`);
   if (orderBy) sql.push(`order by ${orderBy}`);
   if (limit !== undefined && limit !== null) {
@@ -433,7 +437,7 @@ export async function handleQuery(req, res) {
 
   if (verb === 'select') {
     const where = combineAnd([policyUsing, filterWhere]);
-    const statement = selectStatement({ catalog, table: meta, tree, where, orderBy, limit, offset });
+    const statement = selectStatement({ catalog, table: meta, tree, where, orderBy, limit, offset, user });
     const { rows } = await query(statement.text, statement.params);
     if (user && rows.length) {
       await auditRead({ req, user, table, tree, body, where, orderBy, limit, offset, meta, count: rows.length });
@@ -469,7 +473,7 @@ export async function handleQuery(req, res) {
       const pre = await client.query(countStatement(meta, filterWhere), [...(filterWhere?.params ?? [])]);
       matched = Number(pre.rows[0]?.n ?? 0);
     }
-    const written = await writeStatement(client, { catalog, table: meta, tree, verb, where, filterWhere, prepared, onConflict, policyCheck });
+    const written = await writeStatement(client, { catalog, table: meta, tree, verb, where, filterWhere, prepared, onConflict, policyCheck, user });
     if (guarded && written.rows.length === 0 && (matched === null || matched > 0)) {
       throw new ApiError(403, denyReason(user, table, policyVerb), 'FORBIDDEN');
     }
@@ -541,7 +545,7 @@ function countStatement(table, filterWhere) {
 // The CTE is aliased as the table's own name so the policy fragment — which
 // refers to "invoices"."appointment_id" and the like — reads the row the caller
 // actually tried to write, defaults included.
-async function writeStatement(client, { catalog, table, tree, verb, where, filterWhere, prepared, onConflict, policyCheck }) {
+async function writeStatement(client, { catalog, table, tree, verb, where, filterWhere, prepared, onConflict, policyCheck, user }) {
   const alias = table.name;
   const target = `${quoteIdent('public')}.${quoteIdent(table.name)}`;
   const params = [];
@@ -592,7 +596,7 @@ async function writeStatement(client, { catalog, table, tree, verb, where, filte
     ctes.push(`"hh_denied" as (select count(*)::int as n from "hh_written" as ${quoteIdent(alias)} where not (${check.sql}))`);
     statementParams.push(...check.params);
   }
-  ctes.push(`"hh_rows" as (select ${projectionSql(catalog, table, tree)} as "hh_row" from "hh_written" as ${quoteIdent(alias)})`);
+  ctes.push(`"hh_rows" as (select ${projectionSql(catalog, table, tree, user)} as "hh_row" from "hh_written" as ${quoteIdent(alias)})`);
   const hasId = table.columns.has('id');
 
   // With no WITH CHECK fragment there is no "hh_denied" CTE, and the answer is

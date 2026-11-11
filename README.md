@@ -54,7 +54,7 @@ who looked at which record.
 | **Intake** | Check a patient in as a walk-in or for an appointment, with the reason for the visit and intake notes for the clinician. |
 | **Queue** | Today's waiting room, updated live on every screen: waiting, in progress, done. |
 | **Calendar** | Month view of appointments; book, reschedule and open appointments from the calendar, with working hours and default appointment length from the clinic settings. |
-| **Visit notes** | Clinical notes per visit with the intake notes alongside, billable services picked during the visit, and an on-screen signature. Clinicians can be tagged as **Doctor**. |
+| **Visit notes** | Clinical notes per visit with the intake notes alongside, billable services picked during the visit, and an on-screen signature. Only administrators and staff tagged as **Doctor** can read or write them. |
 | **Billing** | Invoices built from your service list, optional tax, part and full payments, printable invoices and receipts, and optional e-mailing of both. |
 | **Expenses** | Record clinic spending by category; optionally scan a receipt photo to pre-fill the form with an AI model you choose. |
 | **Reports** | Revenue summary, today's schedule and queue, and unpaid-invoice ageing. |
