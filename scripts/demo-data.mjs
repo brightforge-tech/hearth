@@ -87,6 +87,8 @@ async function remove() {
     );
     const r = await c.query('delete from public.patients where email like $1', [`%${DOMAIN}`]);
     await c.query("delete from public.services where code like 'DEMO\\_%'");
+    await c.query("delete from public.expenses where reference like 'DEMO-%'");
+    await c.query('delete from public.booking_requests where email like $1', [`%${DOMAIN}`]);
     return r.rowCount;
   });
 }
@@ -120,11 +122,11 @@ async function add() {
     }
 
     const stats = { appointments: 0, notes: 0, invoices: 0, payments: 0 };
-    const appointment = async (patient, start, status, reason, type) => {
+    const appointment = async (patient, start, status, reason, type, intake = null) => {
       const r = await c.query(
-        `insert into public.appointments (patient_id, scheduled_start, status, reason, customer_type)
-         values ($1, $2, $3, $4, $5) returning id`,
-        [patient, start, status, reason, type]
+        `insert into public.appointments (patient_id, scheduled_start, status, reason, customer_type, intake_notes)
+         values ($1, $2, $3, $4, $5, $6) returning id`,
+        [patient, start, status, reason, type, intake]
       );
       stats.appointments++;
       return r.rows[0].id;
@@ -139,7 +141,7 @@ async function add() {
       for (let v = 0; v < visits; v++, n++) {
         const patient = patients[n % patients.length];
         const status = n % 11 === 5 ? 'no_show' : n % 13 === 7 ? 'canceled' : 'completed';
-        const id = await appointment(patient, at(day, 16, v * 30), status, REASONS[n % REASONS.length],
+        const id = await appointment(patient, at(day, 9 + v, 30), status, REASONS[n % REASONS.length],
           n % 2 ? 'appointment' : 'walk-in');
         if (status !== 'completed') continue;
         await c.query(`insert into public.visit_notes (appointment_id, notes) values ($1, $2)`,
@@ -148,7 +150,7 @@ async function add() {
         const inv = (await c.query(
           `insert into public.invoices (appointment_id, status, tax_enabled, tax_rate, created_at)
            values ($1, 'draft', false, 0, $2) returning id`,
-          [id, at(day, 17, v * 30)]
+          [id, at(day, 10 + v, 15)]
         )).rows[0].id;
         stats.invoices++;
         const lines = [services[n % services.length], ...(n % 4 === 0 ? [services[(n + 2) % services.length]] : [])];
@@ -171,7 +173,7 @@ async function add() {
           `insert into public.payments (invoice_id, amount, method, reference, received_at)
            values ($1, $2, $3, $4, $5)`,
           [inv, amount, ['cash', 'card', 'transfer'][n % 3], n % 3 === 2 ? `TRF-${1000 + n}` : null,
-            at(day, 17, 15 + v * 30)]
+            at(day, 10 + v, 20)]
         );
         stats.payments++;
       }
@@ -179,21 +181,47 @@ async function add() {
 
     // Today: a live queue — one with the doctor, two waiting, the rest booked for later.
     const today = [
-      ['in_progress', 16, 0, 'walk-in'],
-      ['waiting', 16, 30, 'walk-in'],
-      ['waiting', 16, 45, 'appointment'],
-      ['scheduled', 17, 15, 'appointment'],
-      ['scheduled', 17, 45, 'appointment'],
-      ['scheduled', 18, 30, 'appointment'],
+      ['in_progress', 9, 0, 'walk-in', 'Temp 37.9 C on arrival. No known allergies.'],
+      ['waiting', 9, 30, 'walk-in', 'BP 128/82 at the desk.'],
+      ['waiting', 9, 45, 'appointment', null],
+      ['scheduled', 11, 15, 'appointment', 'Asked for a longer slot.'],
+      ['scheduled', 13, 45, 'appointment', null],
+      ['scheduled', 15, 30, 'appointment', null],
     ];
-    for (const [i, [status, hh, mm, type]] of today.entries()) {
-      await appointment(patients[(i * 5) % patients.length], at(0, hh, mm), status, REASONS[(i + 3) % REASONS.length], type);
+    for (const [i, [status, hh, mm, type, intake]] of today.entries()) {
+      await appointment(patients[(i * 5) % patients.length], at(0, hh, mm), status, REASONS[(i + 3) % REASONS.length], type, intake);
     }
     // The next few days: upcoming bookings.
     for (let i = 0; i < 6; i++) {
-      await appointment(patients[(i * 3 + 1) % patients.length], at(1 + (i % 3), 16 + (i % 3), 0), 'scheduled',
+      await appointment(patients[(i * 3 + 1) % patients.length], at(1 + (i % 3), 10 + (i % 3) * 2, 0), 'scheduled',
         REASONS[(i + 5) % REASONS.length], 'appointment');
     }
+    // Expenses for this month and last (reference DEMO-… marks them as demo rows).
+    const EXPENSES = [
+      [-28, 'Rent', 'Clinic rent', 1800],
+      [-20, 'Medical Equipment', 'Disposable gloves and syringes', 145.6],
+      [-14, 'Utilities', 'Electricity', 212.4],
+      [-9, 'Office Supplies', 'Printer paper and toner', 64.99],
+      [-5, 'Software Subscriptions', 'Accounting software', 39],
+      [-2, 'Maintenance', 'Air-conditioning service', 180],
+    ];
+    for (const [i, [d, category, description, amount]] of EXPENSES.entries()) {
+      await c.query(
+        `insert into public.expenses (description, amount, category, expense_date, reference, notes)
+         values ($1, $2, $3, $4::date, $5, $6)`,
+        [description, amount, category, at(d, 12).toISOString().slice(0, 10), `DEMO-${100 + i}`, 'Example Supplies Ltd (fictional)']
+      );
+    }
+    stats.expenses = EXPENSES.length;
+    // Two pending online booking requests from fictional people.
+    const day = (d) => at(d, 12).toISOString().slice(0, 10);
+    await c.query(
+      `insert into public.booking_requests (first_name, last_name, email, phone, reason, preferred_date, preferred_time)
+       values ('Quinn', 'Placeholder', $1, '+1 555 0190', 'Travel vaccination advice', $2, '10:30'),
+              ('Rae', 'Example', $3, null, 'Follow-up on test results', $4, '14:00')`,
+      [`quinn.placeholder${DOMAIN}`, day(2), `rae.example${DOMAIN}`, day(3)]
+    );
+    stats.bookings = 2;
     return { patients: patients.length, ...stats };
   });
 }
@@ -210,7 +238,7 @@ async function main() {
   }
   const s = await add();
   console.log(`added ${s.patients} patients, ${s.appointments} appointments, ${s.notes} visit notes, ` +
-    `${s.invoices} invoices and ${s.payments} payments (all fictional)`);
+    `${s.invoices} invoices, ${s.payments} payments, ${s.expenses} expenses and ${s.bookings} booking requests (all fictional)`);
 }
 
 main()

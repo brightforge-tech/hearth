@@ -666,7 +666,9 @@ export async function auditRead({ req, user, table, tree, body, where, orderBy, 
   const { rows } = await query(sql.join('\n'), params);
   const ids = rows.map((r) => r.id);
   for (const t of targets) {
-    await auditMany({ user, action: 'view', entityType: t.entityType, ids, ip: clientIp(req), summary: t.summary, cap: 25 });
+    // a list screen polling every few seconds must not flood the log: more than
+    // five rows from a non-individual read become one summary row
+    await auditMany({ user, action: 'view', entityType: t.entityType, ids, ip: clientIp(req), summary: t.summary, cap: individual ? 25 : 5 });
   }
 }
 

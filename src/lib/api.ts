@@ -407,7 +407,7 @@ export interface AuditRow {
   entity_type: string | null;
   entity_id: string | null;
   ip: string | null;
-  summary: string | null;
+  summary: Record<string, unknown> | string | null;
 }
 
 function auditQuery(filters: AuditFilters): string {

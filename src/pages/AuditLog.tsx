@@ -21,6 +21,16 @@ const ANY = "__any__";
 
 const EMPTY: AuditFilters = { from: "", to: "", actor: "", action: "", entity_type: "", entity_id: "" };
 
+// The summary holds field names and counts (never values): show it compactly.
+function formatSummary(summary: unknown): string {
+  if (summary === null || summary === undefined || summary === "") return "";
+  if (typeof summary === "string") return summary;
+  if (typeof summary !== "object") return String(summary);
+  return Object.entries(summary as Record<string, unknown>)
+    .map(([k, v]) => `${k}: ${Array.isArray(v) ? v.join(", ") : typeof v === "object" && v !== null ? JSON.stringify(v) : String(v)}`)
+    .join("; ");
+}
+
 export default function AuditLog() {
   const { toast } = useToast();
   // `draft` is what the form shows; `filters` is what was last applied.
@@ -206,7 +216,7 @@ export default function AuditLog() {
                           <div>{row.entity_type || "—"}</div>
                           {row.entity_id && <div className="text-xs text-muted-foreground font-mono break-all">{row.entity_id}</div>}
                         </TableCell>
-                        <TableCell className="max-w-md break-words">{row.summary || ""}</TableCell>
+                        <TableCell className="max-w-md break-words">{formatSummary(row.summary)}</TableCell>
                         <TableCell className="text-xs text-muted-foreground">{row.ip || ""}</TableCell>
                       </TableRow>
                     ))}
