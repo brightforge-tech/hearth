@@ -31,6 +31,7 @@ import assert from 'node:assert/strict';
 import { buildInvoicesCsv, buildPaymentsCsv, invoicesDisposition, paymentsDisposition } from '../legacy/quickbooks-export.legacy.mjs';
 import { createScratch, dropScratch, connectDb, loadFixtures, seedFixtures } from '../helpers/db.mjs';
 import { startTestApp, makeTokens } from '../helpers/http.mjs';
+import { ensureTestSessions } from '../helpers/session.mjs';
 
 const SCRATCH = '_c14qbo';
 const JWT_SECRET = 'c14-contract-quickbooks-secret-0123456789';
@@ -63,6 +64,7 @@ async function withContractApp({ root, testUrl }, fn) {
       `insert into public.user_roles (user_id, role)
        values ('00000000-0000-4000-e000-000000000001', 'admin')`
     );
+    await ensureTestSessions(db);
     const tokens = makeTokens(JWT_SECRET, [{ key: 'admin', id: '00000000-0000-4000-e000-000000000001', email: 'admin@c14.test' }]);
 
     try {

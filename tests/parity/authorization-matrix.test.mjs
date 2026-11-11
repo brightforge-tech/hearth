@@ -128,7 +128,7 @@ const MATRIX = {
   },
   patients: {
     select: { body: {}, expect: { anonymous: 401, staff: 200, admin: 200 } }, // 20250812125955 (staff scoped to with-appointment)
-    insert: { body: { payload: { first_name: 'Drop', last_name: 'In', phone: '+1-555-0299' }, select: 'id' }, expect: { anonymous: 200, staff: 200, admin: 200 } }, // allow-list entry; staff WITH CHECK (not admin)
+    insert: { body: { payload: { first_name: 'Drop', last_name: 'In', phone: '+1-555-0299' }, select: 'id' }, expect: { anonymous: 401, staff: 200, admin: 200 } }, // Hearth: no anonymous patient insert (public booking requests instead)
     update: { body: { payload: { phone: '+1-555-0211' }, filters: { id: ID.patient }, select: 'id' }, expect: { anonymous: 401, staff: 200, admin: 200 } }, // staff: has an appointment -> in scope
     delete: { body: { filters: { id: ID.patient }, select: 'id' }, expect: { anonymous: 401, staff: 403, admin: 200 } }, // admin-only
   },
@@ -191,11 +191,25 @@ const MATRIX = {
     update: { body: { payload: { role: 'admin' }, filters: { user_id: ID.doctor, role: 'moderator' }, select: 'role' }, expect: { anonymous: 401, staff: 403, admin: 200 } },
     delete: { body: { filters: { user_id: ID.doctor }, select: 'role' }, expect: { anonymous: 401, staff: 403, admin: 200 } },
   },
+  expenses: {
+    // Hearth: finance roles only (clinical staff are denied); delete admin-only
+    select: { body: {}, expect: { anonymous: 401, staff: 403, admin: 200 } },
+    insert: { body: { payload: { description: 'Matrix gloves', amount: 12.5, category: 'Medical Equipment' }, select: 'id' }, expect: { anonymous: 401, staff: 403, admin: 200 } },
+    update: { body: { payload: { notes: 'edited' }, filters: { description: 'Matrix gloves' }, select: 'id' }, expect: { anonymous: 401, staff: 403, admin: 200 } },
+    delete: { body: { filters: { description: 'Matrix gloves' }, select: 'id' }, expect: { anonymous: 401, staff: 403, admin: 200 } },
+  },
+  booking_requests: {
+    // readable by staff; every write goes through the dedicated endpoints
+    select: { body: {}, expect: { anonymous: 401, staff: 200, admin: 200 } },
+    insert: { body: { payload: { first_name: 'X', last_name: 'Y', reason: 'z', preferred_date: '2030-01-01', preferred_time: '09:00' }, select: 'id' }, expect: { anonymous: 401, staff: 403, admin: 403 } },
+    update: { body: { payload: { status: 'approved' }, filters: { status: 'pending' }, select: 'id' }, expect: { anonymous: 401, staff: 403, admin: 403 } },
+    delete: { body: { filters: { status: 'pending' }, select: 'id' }, expect: { anonymous: 401, staff: 403, admin: 403 } },
+  },
 };
 
 export default [
   {
-    name: 'the 9 tables x 4 verbs x 3 callers answer the exact status codes of the ported policies',
+    name: 'the 11 tables x 4 verbs x 3 callers answer the exact status codes of the ported policies',
     fn: async (ctx) => withMatrixApp(ctx, async ({ app, tokens }) => {
       const problems = [];
       for (const [table, verbs] of Object.entries(MATRIX)) {

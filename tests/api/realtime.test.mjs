@@ -36,7 +36,7 @@ import assert from 'node:assert/strict';
 import http from 'node:http';
 import pg from 'pg';
 
-import { signToken } from '../../api/lib/tokens.mjs';
+import { signTestToken as signToken, ensureTestSessions } from '../helpers/session.mjs';
 import { request, sleep, startServer } from '../helpers/server.mjs';
 
 const SCRATCH = '_t9r';
@@ -123,6 +123,7 @@ async function withApi({ root, testUrl }, fn) {
     await handle.waitForPort();
     await db.connect();
     for (let i = 0; i < FIXTURE.length; i += 2) await db.query(FIXTURE[i], FIXTURE[i + 1]);
+    await ensureTestSessions(db);
 
     const tokenFor = (which) =>
       signToken({ sub: ID[which], email: `${which}@t9r.test` }, { secret: JWT_SECRET });

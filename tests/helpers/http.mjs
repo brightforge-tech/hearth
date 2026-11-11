@@ -22,7 +22,7 @@
 
 import http from 'node:http';
 
-import { signToken } from '../../api/lib/tokens.mjs';
+import { signTestToken as signToken, ensureTestSessions } from './session.mjs';
 import { request, startServer } from './server.mjs';
 
 // The senders the contract suites boot the app with. The milestones' sender

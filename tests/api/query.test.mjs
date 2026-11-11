@@ -26,7 +26,7 @@
 
 import pg from 'pg';
 
-import { signToken } from '../../api/lib/tokens.mjs';
+import { signTestToken as signToken, ensureTestSessions } from '../helpers/session.mjs';
 import { request, startServer } from '../helpers/server.mjs';
 
 const SCRATCH = '_t7';
@@ -144,6 +144,7 @@ async function withApi({ root, testUrl }, fn) {
     await handle.waitForPort();
     await db.connect();
     for (let i = 0; i < FIXTURE.length; i += 2) await db.query(FIXTURE[i], FIXTURE[i + 1]);
+    await ensureTestSessions(db);
 
     const tokenFor = (which) =>
       signToken({ sub: ID[which], email: `${which}@t7.test` }, { secret: JWT_SECRET });
@@ -295,7 +296,7 @@ export default [
     }),
   },
   {
-    name: 'the anonymous allow-list is exactly two shapes: landing services read and intake patient insert',
+    name: 'the anonymous allow-list is exactly one shape: the landing services read (no anonymous patient insert)',
     fn: async (ctx) => withApi(ctx, async ({ q, db, tokens }) => {
       // landing read: the five seeded services, never the hidden one
       const services = okData(await q({ table: 'services', select: 'id, name, show_on_landing' }, null));
@@ -307,17 +308,15 @@ export default [
       assert.equal(all.length, 6);
       assert.ok(all.some((s) => s.name === 'Hidden Lab Panel'));
 
-      // intake insert: works with no session at all; the written row comes back
-      const created = okData(await q({
+      // the hosted app let anyone insert a patient from the landing page;
+      // Hearth does not (public booking requests have their own endpoint)
+      errorBody(await q({
         table: 'patients',
         verb: 'insert',
         payload: { first_name: 'Walk', last_name: 'In', national_id: 'NID-WALK-IN' },
-      }, null));
-      assert.equal(created.length, 1);
-      assert.equal(typeof created[0].id, 'string');
-      assert.match(created[0].id, /^[0-9a-f-]{36}$/);
-      const inDb = await db.query('select first_name from public.patients where national_id = $1', ['NID-WALK-IN']);
-      assert.equal(inDb.rows[0].first_name, 'Walk');
+      }, null), 401, 'UNAUTHORIZED');
+      const inDb = await db.query('select count(*)::int as n from public.patients where national_id = $1', ['NID-WALK-IN']);
+      assert.equal(inDb.rows[0].n, 0);
 
       // everything else is still 401
       errorBody(await q({ table: 'patients', verb: 'update', payload: { first_name: 'x' }, filters: { national_id: 'NID-000' } }, null), 401, 'UNAUTHORIZED');

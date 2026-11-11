@@ -13,7 +13,7 @@
 import { CLINIC_NAME } from '../helpers/brand.mjs';
 import pg from 'pg';
 
-import { signToken } from '../../api/lib/tokens.mjs';
+import { signTestToken as signToken, ensureTestSessions } from '../helpers/session.mjs';
 import { request, startServer } from '../helpers/server.mjs';
 import { startResendStub } from '../helpers/resend-stub.mjs';
 
@@ -148,6 +148,7 @@ async function withApi({ root, testUrl, env = {}, seed = {}, fixture = null }, f
 
     const users = {};
     for (const [alias, role] of Object.entries(seed)) users[alias] = await insertUser(db, alias, role);
+    await ensureTestSessions(db);
     const fx = fixture ? await fixture(db) : {};
 
     const api = {

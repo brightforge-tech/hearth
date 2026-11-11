@@ -247,7 +247,7 @@ export default [
 
       // the column list the RPC contract promises
       const names = r.fields.map((f) => f.name);
-      if (JSON.stringify(names) !== JSON.stringify(['user_id', 'email', 'created_at', 'role']))
+      if (JSON.stringify(names) !== JSON.stringify(['user_id', 'email', 'created_at', 'role', 'is_doctor', 'must_change_password', 'last_login_at']))
         throw new Error(`columns are ${names.join(', ')}`);
     },
   },

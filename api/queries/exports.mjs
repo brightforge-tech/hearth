@@ -181,3 +181,16 @@ export async function fetchPaymentExport({ start, end }) {
           },
   }));
 }
+
+// fetchExpenseExport({start, end}): expenses whose expense_date falls in the
+// range (the date part of each bound; both inclusive).
+export async function fetchExpenseExport({ start, end }) {
+  const { rows } = await query(
+    `select id, expense_date::text as expense_date, category, description, amount, reference, notes
+       from public.expenses
+      where expense_date >= ($1::timestamptz)::date and expense_date <= ($2::timestamptz)::date
+      order by expense_date, created_at`,
+    [start, end]
+  );
+  return rows;
+}

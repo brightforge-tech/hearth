@@ -40,6 +40,7 @@ import express from 'express';
 import { withUser } from '../db.mjs';
 import { ApiError, asyncHandler, sendJson } from '../lib/http.mjs';
 import { requireAuth } from '../lib/session.mjs';
+import { clientIp, recordAudit } from '../lib/audit.mjs';
 
 // The RPC allow-list. A Map on purpose: name lookups cannot reach prototype
 // members, and adding an entry is the only way to expose a new function.
@@ -52,6 +53,33 @@ export const RPC_FUNCTIONS = new Map([
       // created_at text, role text); raises 'Access denied. Admin role required.'
       // unless public.current_uid() holds the admin role.
       sql: 'select * from public.get_users_with_roles()',
+    },
+  ],
+  [
+    'admin_update_user_role',
+    {
+      // db/migrations/0008_features.sql: replaces the target's roles with one
+      // role + the doctor tag; raises 'Access denied…' unless the caller is an
+      // admin (and refuses an admin demoting themselves).
+      sql: 'select public.admin_update_user_role($1::uuid, $2::public.app_role, $3::boolean) as done',
+      params: (body) => {
+        const id = String(body?.target_user_id ?? '');
+        const role = String(body?.new_role ?? '');
+        if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id)) {
+          throw new ApiError(400, 'target_user_id must be a uuid', 'INVALID_INPUT');
+        }
+        if (!['admin', 'moderator', 'user'].includes(role)) {
+          throw new ApiError(400, 'new_role must be admin, moderator or user', 'INVALID_INPUT');
+        }
+        return [id, role, body?.new_is_doctor === true];
+      },
+      audit: (body) => ({
+        action: 'update',
+        entityType: 'user',
+        entityId: String(body?.target_user_id ?? ''),
+        summary: { role: String(body?.new_role ?? ''), is_doctor: body?.new_is_doctor === true },
+      }),
+      empty: true,
     },
   ],
 ]);
@@ -78,8 +106,13 @@ async function runRpc(req, res) {
   }
   // req.user.id is a uuid: requireAuth validated it against app_users first.
   let result;
+  const params = rpc.params ? rpc.params(req.body ?? {}) : [];
   try {
-    result = await withUser(req.user.id, (client) => client.query(rpc.sql));
+    result = await withUser(req.user.id, async (client) => {
+      const r = await client.query(rpc.sql, params);
+      if (rpc.audit) await recordAudit({ db: client, user: req.user, ip: clientIp(req), ...rpc.audit(req.body ?? {}) });
+      return rpc.empty ? { rows: [] } : r;
+    });
   } catch (err) {
     if (isAccessDenied(err)) {
       throw new ApiError(403, String(err.message).split('\n')[0].trim(), 'FORBIDDEN');

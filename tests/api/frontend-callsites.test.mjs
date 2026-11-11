@@ -41,7 +41,8 @@ const JWT_SECRET = 't12-front-end-suite-secret-0123456789abcdef';
 
 // The seeded staff account is the identity the pages log in as here (the
 // fixture users carry fake hashes); it passes the endpoints' requireRole gate.
-const SEED_STAFF = { email: 'staff@example.test', password: 'Staff#2025test' };
+// (Exports are a finance-role feature, so the suite signs in as the seeded admin.)
+const SEED_STAFF = { email: 'admin@example.test', password: 'Admin#2025test' };
 
 // A localStorage stand-in holding the shim's session entry; apiFetch reads it
 // fresh on every call. Installed before api.ts loads (nothing in src reads
@@ -129,7 +130,7 @@ async function withFrontend({ root, testUrl }, fn) {
     }
   }
 
-  const handle = startServer({ root, databaseUrl: dsn, env: { JWT_SECRET, SEED_ACCOUNTS: '1' } });
+  const handle = startServer({ root, databaseUrl: dsn, env: { JWT_SECRET, SEED_ACCOUNTS: '1', RESEND_API_KEY: 'rk_unused_test_key', RESEND_API_BASE: 'http://127.0.0.1:9' } });
   const db = new pg.Client(clientParams(dsn, scratch));
   const savedViteApiUrl = process.env.VITE_API_URL;
   const baseUrl = () => `http://127.0.0.1:${handle.port}`;

@@ -186,7 +186,8 @@ export default [
         if (headerJson.alg !== 'HS256' || headerJson.typ !== 'JWT') throw new Error(`token header: ${JSON.stringify(headerJson)}`);
 
         // no credential material on the wire — not even hashed
-        const lower = r.text.toLowerCase();
+        // (the must_change_password flag is the one key allowed to say "password")
+        const lower = r.text.toLowerCase().split('must_change_password').join('');
         for (const leak of ['password', 'hash', 'scrypt']) {
           if (lower.includes(leak)) throw new Error(`the login body mentions "${leak}": ${r.text.slice(0, 200)}`);
         }
@@ -323,45 +324,39 @@ export default [
     },
   },
   {
-    name: 'W18: POST /api/auth/signup creates a role-user account with a session; a repeat is 409 with no second row',
+    name: 'signup is disabled by default; with ALLOW_SELF_SIGNUP it creates a role-less account (no session, no data access); a repeat is 409',
     async fn({ root, testUrl }) {
+      const email = `t5-signup-${Date.now()}-${Math.floor(Math.random() * 1e6)}@signup.test`;
+      const password = 'S1gnup-Str0ng!pw';
       await withApi({ root, testUrl }, async (api) => {
-        const email = `t5-signup-${Date.now()}-${Math.floor(Math.random() * 1e6)}@signup.test`;
-        const password = 'S1gnup-Str0ng!pw';
-
+        expectError(await api.postJson('/api/auth/signup', { email, password }), 403, { label: 'signup off', code: 'SIGNUP_DISABLED' });
+        const n = await api.db.query('select count(*)::int as n from public.app_users where email = $1', [email]);
+        if (n.rows[0].n !== 0) throw new Error('a disabled signup created an account');
+      });
+      await withApi({ root, testUrl, env: { ALLOW_SELF_SIGNUP: '1' } }, async (api) => {
         const r = await api.postJson('/api/auth/signup', { email, password });
-        if (r.status !== 200) throw new Error(`signup -> ${r.status}: ${r.text}`);
-        expectSessionBody(r.json, { label: 'signup', email, role: 'user' });
-
-        // the account really holds role 'user' (not admin — the API decides)
+        if (r.status !== 201) throw new Error(`signup -> ${r.status}: ${r.text}`);
+        if (r.json.access_token) throw new Error('signup must not hand out a session');
         const roles = await api.db.query(
-          `select r.role::text as role from public.user_roles r join public.app_users u on u.id = r.user_id where u.email = $1`,
-          [email]
-        );
-        if (roles.rows.map((row) => row.role).join(',') !== 'user') throw new Error(`roles for ${email}: ${JSON.stringify(roles.rows)}`);
-
-        // and the returned session is a real session
-        const session = await request(api.port, '/api/auth/session', { headers: { authorization: `Bearer ${r.json.access_token}` } });
-        if (session.status !== 200 || session.json.roles.join(',') !== 'user') throw new Error(`new account session: ${session.status} ${session.text}`);
-
-        // signing the same e-mail up again: 409, error envelope, one row
-        const again = await api.postJson('/api/auth/signup', { email, password });
-        expectError(again, 409, { label: 'duplicate signup', code: 'EMAIL_TAKEN' });
-        const count = await api.db.query('select count(*)::int as n from public.app_users where email = $1', [email]);
-        if (count.rows[0].n !== 1) throw new Error(`${count.rows[0].n} app_users rows after a duplicate signup`);
-        const roleCount = await api.db.query(
           'select count(*)::int as n from public.user_roles r join public.app_users u on u.id = r.user_id where u.email = $1',
           [email]
         );
-        if (roleCount.rows[0].n !== 1) throw new Error(`${roleCount.rows[0].n} role rows after a duplicate signup`);
-
-        // the new account can log in normally
+        if (roles.rows[0].n !== 0) throw new Error('a self-registered account must not get a role');
+        expectError(await api.postJson('/api/auth/signup', { email, password }), 409, { label: 'duplicate signup', code: 'EMAIL_TAKEN' });
+        const count = await api.db.query('select count(*)::int as n from public.app_users where email = $1', [email]);
+        if (count.rows[0].n !== 1) throw new Error(`${count.rows[0].n} app_users rows after a duplicate signup`);
+        // it can sign in, but without a role every data route is 403 NO_ROLE
         const login = await api.login(email, password);
-        if (login.status !== 200 || login.json.user.roles.join(',') !== 'user') throw new Error(`login for the signed-up account: ${login.status} ${login.text}`);
-
-        // input validation happens server-side
+        if (login.status !== 200) throw new Error(`login -> ${login.status}: ${login.text}`);
+        const q = await request(api.port, '/api/query', {
+          method: 'POST',
+          headers: { authorization: `Bearer ${login.json.access_token}`, 'content-type': 'application/json' },
+          body: JSON.stringify({ table: 'patients', select: 'id' }),
+        });
+        if (q.status !== 401 && q.status !== 403) throw new Error(`role-less account read patients: ${q.status} ${q.text}`);
         expectError(await api.postJson('/api/auth/signup', { email: 'not-an-email', password }), 400, { label: 'bad e-mail' });
         expectError(await api.postJson('/api/auth/signup', { email: `short.${Date.now()}@signup.test`, password: 'short' }), 400, { label: 'short password' });
+        expectError(await api.postJson('/api/auth/signup', { email: `digits.${Date.now()}@signup.test`, password: '123456789012345' }), 400, { label: 'digits only' });
         expectError(await api.postJson('/api/auth/signup', { email: `dup.${Date.now()}@signup.test` }), 400, { label: 'no password' });
       });
     },

@@ -44,7 +44,50 @@ export const ROUTE_GROUPS = [
   { name: 'quickbooks-export', file: 'quickbooks-export.mjs', path: '/api/quickbooks-export' }, // t10
   { name: 'send-invoice-email', file: 'send-invoice-email.mjs', path: '/api/send-invoice-email' }, // t11
   { name: 'send-receipt-email', file: 'send-receipt-email.mjs', path: '/api/send-receipt-email' }, // t12
+  { name: 'public', file: 'public.mjs', path: '/api/public' }, // public booking requests
+  { name: 'booking-requests', file: 'booking-requests.mjs', path: '/api/booking-requests' },
+  { name: 'audit', file: 'audit.mjs', path: '/api/audit' },
+  { name: 'expenses', file: 'expenses.mjs', path: '/api/expenses' },
 ];
+
+// trustProxySetting(env): which hops may set X-Forwarded-For (the client IP
+// feeds the login throttle and the audit log). Default: loopback and private
+// networks — a reverse proxy on the same host or the same Docker network —
+// so a client talking to the port directly cannot spoof its address.
+// TRUST_PROXY=false trusts nobody; any other value is passed to express.
+export function trustProxySetting(env = process.env) {
+  const raw = String(env.TRUST_PROXY ?? '').trim();
+  if (raw === '') return 'loopback, linklocal, uniquelocal';
+  if (['false', '0', 'no', 'off'].includes(raw.toLowerCase())) return false;
+  if (['true', 'yes', 'on'].includes(raw.toLowerCase())) return true;
+  if (/^\d+$/.test(raw)) return Number(raw);
+  return raw;
+}
+
+// Baseline browser hardening for every response. The SPA loads only its own
+// bundle, so a strict same-origin policy fits.
+const CSP = [
+  "default-src 'self'",
+  "script-src 'self'",
+  "style-src 'self' 'unsafe-inline'",
+  "img-src 'self' data: blob:",
+  "font-src 'self' data:",
+  "connect-src 'self'",
+  "object-src 'none'",
+  "frame-ancestors 'none'",
+  "base-uri 'self'",
+  "form-action 'self'",
+].join('; ');
+
+function securityHeaders(req, res, next) {
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('X-Frame-Options', 'DENY');
+  res.setHeader('Referrer-Policy', 'no-referrer');
+  res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=()');
+  res.setHeader('Content-Security-Policy', CSP);
+  if (req.secure) res.setHeader('Strict-Transport-Security', 'max-age=31536000');
+  next();
+}
 
 // createApp({ distDir, routeDir, env, log }): the express application, not yet
 // listening. Exported so the tests can build the app with their own environment
@@ -59,10 +102,11 @@ export async function createApp({
   const app = express();
   // The API may sit behind a proxy in deployment; trust the first hop so req.ip
   // and the secure-cookie flag are right.
-  app.set('trust proxy', 1);
+  app.set('trust proxy', trustProxySetting(env));
   app.disable('x-powered-by');
 
   app.use(requestLogger(log));
+  app.use(securityHeaders);
 
   // Liveness/readiness: 200 + JSON once the startup sequence has reached
   // "listen" (the sequence only reaches listen after a DB ping, migrations and
@@ -76,7 +120,17 @@ export async function createApp({
   });
 
   // --- the /api tree -------------------------------------------------------
-  app.use('/api', corsMiddleware(), jsonBodyParser());
+  // Receipt images are the one large JSON body; everything else stays at 1 MB.
+  const smallJson = jsonBodyParser();
+  const receiptJson = jsonBodyParser({ limit: 12 * 1024 * 1024 });
+  app.use('/api', corsMiddleware(), (req, res, next) =>
+    (req.path === '/expenses/analyze-receipt' ? receiptJson : smallJson)(req, res, next)
+  );
+  // Patient data must never sit in a shared or browser cache.
+  app.use('/api', (req, res, next) => {
+    res.setHeader('Cache-Control', 'no-store');
+    next();
+  });
   if (env.HH_TEST_PROBE) app.use('/api/__probe', (await import('./__probe.mjs')).default({ env, log }));
   for (const group of await loadExistingRoutes(routeDir, env, log)) {
     app.use(group.path, group.router);

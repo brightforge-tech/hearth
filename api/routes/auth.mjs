@@ -1,72 +1,67 @@
-// api/routes/auth.mjs — staff sessions: signup, login, session, logout and
-// admin user creation (task t5; criteria W14, W15, W16, W18, W20).
+// api/routes/auth.mjs — staff sessions and account security.
 //
-// Mounted by api/routes/index.mjs at /api/auth. The contracts:
+// Mounted by api/routes/index.mjs at /api/auth:
 //
-//   POST   /api/auth/login       JSON {"email","password"} (username/pass are
-//                                 accepted too)      -> 200 {access_token, user,
-//                                 roles} + session cookie; wrong credentials
-//                                 -> 401 {"error":{"code","message"}} and no
-//                                 cookie is set, so no session exists (W14)
-//   POST   /api/auth/login       application/x-www-form-urlencoded body
-//                                 user=...&pass=...   -> 302 to / with the
-//                                 hh_token cookie set: the scripted/crawler
-//                                 login path (W16)
-//   GET    /api/auth/session     valid bearer token or cookie -> 200 {user,
-//                                 roles}; absent, forged or expired -> 401 (W15)
-//   POST   /api/auth/signup      {"email","password"} -> 200 with a session for
-//                                 the new account, which immediately holds the
-//                                 'user' role; the same e-mail a second time ->
-//                                 409 and no second row (W18)
-//   POST   /api/auth/logout      clears the session cookie
-//   POST   /api/auth/admin/users admin-only: create an account with a role
-//                                 (S32: the role decision is made here, on the
-//                                 server, never in the browser)
+//   POST /login                      JSON {email,password} -> 200 session; 401
+//                                    INVALID_CREDENTIALS; 429 LOGIN_LOCKED.
+//                                    urlencoded form -> 302 / + session cookie.
+//   GET  /login                      a minimal HTML sign-in form (scripted use)
+//   GET  /session                    the caller (allowed while a forced
+//                                    password change is pending)
+//   POST /logout                     revokes the server-side session
+//   POST /change-password            {current_password,new_password} -> new session
+//   GET  /features                   which optional integrations are on (public)
+//   POST /password-reset/request     {email} -> 202 (only with e-mail configured)
+//   POST /password-reset/confirm     {token,new_password}
+//   POST /signup                     disabled unless ALLOW_SELF_SIGNUP; creates a
+//                                    role-less account (an admin grants a role)
+//   POST /admin/users                admin: create an account (forced change)
+//   POST /admin/users/:id/reset-password  admin: temporary password
 //
-// Why the identity/roles come back as they do: the token is only a signature
-// the bearer presents (api/lib/tokens.mjs); who the caller is and what they may
-// do are re-read from app_users/user_roles on every request (api/lib/session.mjs).
-// So `roles` in these responses is the database's answer at this instant, and
-// revoking a role needs no token invalidation.
+// Security properties (see docs/PRIVACY-AND-SECURITY.md):
+//   * failed sign-ins are throttled per account name and per IP in the
+//     database (api/lib/throttle.mjs);
+//   * every sign-in creates a new server-side session (api/lib/sessions.mjs):
+//     idle timeout, absolute lifetime, revocation on logout/password change;
+//   * new passwords must pass api/lib/password-policy.mjs;
+//   * login, failed login, logout and account changes are written to the
+//     audit log (api/lib/audit.mjs);
+//   * who the caller is and what they may do are re-read from the database on
+//     every request (api/lib/session.mjs), never trusted from the token.
 //
-// The session cookie is the scripted-login convenience (SameSite=Lax, Path=/).
-// The bearer token in localStorage stays the SPA's primary path. Because a
-// browser can ride the cookie, every state-changing route here that can be
-// authenticated by the cookie alone additionally requires an
-// application/json content type (requireJsonMutation) — a cross-site <form>
-// cannot set that header, and the one route that must accept a form (login)
-// changes nothing in the caller's data.
+// The session cookie mirrors the bearer token for scripted logins (SameSite=
+// Lax). Every state-changing route that a cookie alone can authenticate also
+// requires an application/json content type (requireJsonMutation), which a
+// cross-site <form> cannot send.
 
+import { createHash, randomBytes } from 'node:crypto';
 import express from 'express';
 
 import { query, tx } from '../db.mjs';
 import { ApiError, asyncHandler, readJsonBody, readRawBody, sendJson } from '../lib/http.mjs';
 import { hashPassword, verifyPassword } from '../lib/passwords.mjs';
-import { requireAuth, requireOptionalAuth, requireRole, SESSION_COOKIE } from '../lib/session.mjs';
-import { sessionTtlHours, signToken } from '../lib/tokens.mjs';
+import { checkPassword } from '../lib/password-policy.mjs';
+import { readSessionToken, requireAuth, requireAuthAllowPending, requireRole, resolveUser, SESSION_COOKIE } from '../lib/session.mjs';
+import { createSession, revokeSession, revokeUserSessions } from '../lib/sessions.mjs';
+import { checkLogin, recordAttempt } from '../lib/throttle.mjs';
+import { clientIp, recordAudit } from '../lib/audit.mjs';
+import { features, passwordResetEmailEnabled, selfSignupEnabled } from '../lib/features.mjs';
+import { sendEmail } from '../lib/resend.mjs';
+import { escapeHtml } from '../lib/escape.mjs';
+import { CLINIC_NAME, PRODUCT_NAME } from '../lib/brand.mjs';
+import { decodeToken } from '../lib/tokens.mjs';
 
-// Login/sign-up field spellings accepted on every content type. The crawler
-// forms and the SPA both land on email/password; the
-// form path is classically user/pass.
 const IDENTITY_FIELDS = ['email', 'username', 'user'];
 const PASSWORD_FIELDS = ['password', 'pass'];
-
-// An account whose e-mail is not this shape is a typo or an attack, never a
-// staff member; the same regex guards every write to app_users.email.
 const EMAIL_RE = /^[^\s@,;:]+@[^\s@,;:]+\.[^\s@,;:]+$/;
-
-// The shortest password the API will store. (Login never applies this — it
-// only verifies — so an account can never be locked out by a policy change.)
-const MIN_PASSWORD_LENGTH = 8;
-
-// The roles an admin may grant; exactly public.app_role (0001_enums.sql).
 const GRANTABLE_ROLES = ['admin', 'moderator', 'user'];
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const RESET_TOKEN_MINUTES = 60;
 
-function badRequest(message) {
-  return new ApiError(400, message, 'INVALID_INPUT');
+function badRequest(message, code = 'INVALID_INPUT') {
+  return new ApiError(400, message, code);
 }
 
-// normalizeEmail: trim + lowercase, the form every writer and reader uses.
 function normalizeEmail(value) {
   return typeof value === 'string' ? value.trim().toLowerCase() : '';
 }
@@ -79,9 +74,6 @@ function readField(body, names) {
   return null;
 }
 
-// readCredentials(req): {identifier, password} from a JSON or urlencoded body.
-// The jsonBodyParser already consumed (and parsed) application/json; anything
-// else — urlencoded above all — arrives untouched on the stream.
 async function readCredentials(req) {
   const contentType = String(req.headers['content-type'] ?? '').split(';')[0].trim().toLowerCase();
   let body;
@@ -93,66 +85,58 @@ async function readCredentials(req) {
   }
   return {
     identifier: readField(body, IDENTITY_FIELDS),
-    password: readField(body, PASSWORD_FIELDS),
+    // a password is taken as typed (not trimmed): spaces may be part of it
+    password: PASSWORD_FIELDS.map((n) => body?.[n]).find((v) => typeof v === 'string' && v !== '') ?? null,
     redirected: contentType === 'application/x-www-form-urlencoded',
   };
 }
 
-// validateEmailPassword: the shared write-side validation for signup and
-// admin user creation.
-function validateEmailPassword(identifier, password) {
-  const email = normalizeEmail(identifier);
-  if (!EMAIL_RE.test(email)) throw badRequest('email must be a valid e-mail address');
-  if (typeof password !== 'string' || password.length < MIN_PASSWORD_LENGTH) {
-    throw badRequest(`password must be a string of at least ${MIN_PASSWORD_LENGTH} characters`);
-  }
-  if (password.length > 1024) throw badRequest('password must be at most 1024 characters');
-  return { email, password };
+// validateNewPassword: the policy, as a 400 WEAK_PASSWORD.
+function validateNewPassword(password, email) {
+  const problem = checkPassword(password, { email });
+  if (problem) throw badRequest(problem, 'WEAK_PASSWORD');
 }
 
-// loadAccount(email): the row login needs — identity, hash, and the roles
-// aggregated exactly like api/lib/session.mjs does, so the token body and the
-// session endpoint can never disagree.
+function validateEmail(identifier) {
+  const email = normalizeEmail(identifier);
+  if (!EMAIL_RE.test(email) || email.length > 254) throw badRequest('email must be a valid e-mail address');
+  return email;
+}
+
 async function loadAccount(email) {
   const { rows } = await query(
-    `select u.id,
-            u.email,
-            u.password_hash,
-            coalesce(
-              array_agg(r.role::text order by r.role) filter (where r.role is not null),
-              '{}'::text[]
-            ) as roles
+    `select u.id, u.email, u.password_hash, u.must_change_password,
+            coalesce(bool_or(r.is_doctor), false) as is_doctor,
+            coalesce(array_agg(r.role::text order by r.role) filter (where r.role is not null), '{}'::text[]) as roles
        from public.app_users u
        left join public.user_roles r on r.user_id = u.id
       where u.email = $1
-      group by u.id, u.email, u.password_hash`,
+      group by u.id, u.email, u.password_hash, u.must_change_password`,
     [email]
   );
   return rows[0] ?? null;
 }
 
-// createAccount(email, password, role): one transaction, user + role, so no
-// account can exist in a role-less half state through this door (a roleless
-// account is 403 NO_ROLE everywhere else — see session.mjs). The one caller
-// that deliberately passes role=null is the admin user-creation door: the
-// browser page picks the role itself and inserts the user_roles row right
-// afterwards, exactly like supabase-js's auth.admin.createUser (which never
-// granted a role) behaved before the migration.
-async function createAccount(email, password, role) {
+async function loadAccountById(id) {
+  const { rows } = await query('select email from public.app_users where id = $1', [id]);
+  return rows[0]?.email ? loadAccount(rows[0].email) : null;
+}
+
+// createAccount(email, password, role, {mustChange}): user + role in one tx.
+async function createAccount(email, password, role, { mustChange = false } = {}) {
   const hash = await hashPassword(password);
   try {
     return await tx(async (client) => {
       const inserted = await client.query(
-        'insert into public.app_users (email, password_hash) values ($1, $2) on conflict (email) do nothing returning id',
-        [email, hash]
+        `insert into public.app_users (email, password_hash, must_change_password, password_changed_at)
+         values ($1, $2, $3, now()) on conflict (email) do nothing returning id`,
+        [email, hash, mustChange]
       );
-      if (!inserted.rows.length) return null; // the e-mail got taken between check and insert
-      if (role === null) return { id: inserted.rows[0].id, email, roles: [] };
-      await client.query('insert into public.user_roles (user_id, role) values ($1, $2::public.app_role) on conflict do nothing', [
-        inserted.rows[0].id,
-        role,
-      ]);
-      return { id: inserted.rows[0].id, email, roles: [role] };
+      if (!inserted.rows.length) return null;
+      const id = inserted.rows[0].id;
+      if (role === null) return { id, email, roles: [], must_change_password: mustChange };
+      await client.query('insert into public.user_roles (user_id, role) values ($1, $2::public.app_role) on conflict do nothing', [id, role]);
+      return { id, email, roles: [role], must_change_password: mustChange };
     });
   } catch (e) {
     if (e && e.code === '23505') throw new ApiError(409, 'An account with this e-mail already exists', 'EMAIL_TAKEN');
@@ -162,60 +146,58 @@ async function createAccount(email, password, role) {
 
 // --- session cookie ----------------------------------------------------------
 
-// cookie(name=value) header: Path=/ so it reaches every /api route; SameSite=Lax
-// so a cross-site POST never rides on it; no Max-Age on read (the token's own
-// exp is the real deadline); Secure whenever the request itself arrived over TLS.
 function setSessionCookie(res, req, token, maxAgeSeconds) {
-  const parts = [`${SESSION_COOKIE}=${token}`, 'Path=/', 'SameSite=Lax'];
+  const parts = [`${SESSION_COOKIE}=${token}`, 'Path=/', 'SameSite=Lax', 'HttpOnly'];
   if (maxAgeSeconds !== undefined) parts.push(`Max-Age=${maxAgeSeconds}`);
-  if (req.secured) parts.push('Secure');
+  if (req.secure || req.secured) parts.push('Secure');
   res.append('Set-Cookie', parts.join('; '));
 }
 
 function clearSessionCookie(res, req) {
-  const parts = [`${SESSION_COOKIE}=`, 'Path=/', 'SameSite=Lax', 'Max-Age=0', 'Expires=Thu, 01 Jan 1970 00:00:00 GMT'];
-  if (req.secured) parts.push('Secure');
+  const parts = [`${SESSION_COOKIE}=`, 'Path=/', 'SameSite=Lax', 'HttpOnly', 'Max-Age=0', 'Expires=Thu, 01 Jan 1970 00:00:00 GMT'];
+  if (req.secure || req.secured) parts.push('Secure');
   res.append('Set-Cookie', parts.join('; '));
 }
 
-// sessionPayload: the 200 body login and signup answer with. access_token for
-// the Authorization header (the SPA keeps it in localStorage); user carries the
-// id/email/roles the pages render; the cookie mirrors the token for crawlers.
-function sessionPayload(res, req, account, { withCookie = true } = {}) {
-  const token = signToken({ sub: account.id, email: account.email });
-  const hours = sessionTtlHours();
-  if (withCookie) setSessionCookie(res, req, token, Math.round(hours * 3600));
+// The sid of a token the caller presented (signature not needed: it is only
+// used to revoke that session, which an attacker gains nothing from).
+function presentedSid(req) {
+  const token = readSessionToken(req);
+  const sid = token ? decodeToken(token)?.payload?.sid : null;
+  return typeof sid === 'string' && UUID_RE.test(sid) ? sid : null;
+}
+
+// startSession: a NEW server-side session (the presented one, if any, is
+// revoked first — session ids are rotated on every sign-in) and the 200 body.
+async function startSession(res, req, account, { withCookie = true } = {}) {
+  const old = presentedSid(req);
+  if (old) await revokeSession(old);
+  const { token, expiresIn } = await createSession(account, req);
+  if (withCookie) setSessionCookie(res, req, token, expiresIn);
+  const user = {
+    id: account.id,
+    email: account.email,
+    roles: account.roles,
+    is_doctor: Boolean(account.is_doctor),
+    must_change_password: Boolean(account.must_change_password),
+  };
   return {
     access_token: token,
     token_type: 'Bearer',
-    expires_in: Math.round(hours * 3600),
-    user: { id: account.id, email: account.email, roles: account.roles },
+    expires_in: expiresIn,
+    user,
     roles: account.roles,
+    must_change_password: user.must_change_password,
   };
 }
 
-// --- CSRF guard ---------------------------------------------------------------
-
-// requireJsonMutation: a state-changing request that authenticates with the
-// session cookie (no Authorization header) must carry an application/json
-// content type — the one thing a cross-site <form> cannot set. A bearer-token
-// request proves intent beyond any doubt (the token is not attachable
-// cross-origin), so it always passes. Mounted after requireAuth/
-// requireOptionalAuth so req.user reflects the cookie.
 function requireJsonMutation(req, res, next) {
   const bearer = /^\s*bearer\s+\S+/i.test(String(req.headers.authorization ?? ''));
   if (!req.user || bearer || req.jsonContentType === true) return next();
   return next(new ApiError(403, 'Cookie-authenticated requests must send Content-Type: application/json', 'CSRF'));
 }
 
-// GET /login — the login PAGE (not just the endpoint). Scripted sign-ins —
-// test harnesses, crawlers, any cookie-holding bot —
-// treat the login path as a page: GET it, fill the named fields, POST the
-// form. So the endpoint also serves the form it POSTs to. Both field spellings
-// are in the form (email/password and user/pass); empty ones are ignored by
-// readCredentials, so whichever the caller fills wins, and the POST handler
-// below is the only submit target. A wrong password on this form still gets
-// the JSON 401 — one answer for bad credentials, page or wire.
+// GET /login — a minimal sign-in page for scripted use (the SPA has its own).
 const LOGIN_PAGE = `<!doctype html>
 <html lang="en">
 <head>
@@ -250,97 +232,251 @@ function handleLoginPage(req, res) {
   res.status(200).type('text/html; charset=utf-8').send(LOGIN_PAGE);
 }
 
+// A syntactically valid scrypt record nothing matches: the unknown-account
+// branch costs the same as a wrong password.
+const DUMMY_HASH = 'scrypt$16384$8$1$ZHVtbXktc2FsdC1mb3ItY29uc3RhbnQt$ZHVtbXktc2FsdC1mb3ItY29uc3RhbnQt';
+
 // --- handlers ------------------------------------------------------------------
 
-// POST /login — W14 (JSON) and W16 (form + cookie + 302).
 const handleLogin = asyncHandler(async (req, res) => {
   const { identifier, password, redirected } = await readCredentials(req);
   if (!identifier || typeof password !== 'string' || password === '') {
     throw badRequest('email and password are required');
   }
-  const account = await loadAccount(normalizeEmail(identifier));
-  // A missing account verifies against a fixed well-formed record so the two
-  // failures cost the same work; the caller sees one answer either way.
+  const email = normalizeEmail(identifier).slice(0, 254);
+  const ip = clientIp(req);
+
+  const lock = await checkLogin(email, ip);
+  if (lock.locked) {
+    await recordAudit({ actorEmail: email, action: 'login_failed', entityType: 'session', ip, summary: { reason: lock.scope === 'ip' ? 'ip_locked' : 'account_locked' } });
+    const minutes = Math.max(1, Math.ceil(lock.retryAfter / 60));
+    res.setHeader('Retry-After', String(lock.retryAfter));
+    throw Object.assign(
+      new ApiError(429, `Too many failed sign-in attempts. Try again in ${minutes} minute${minutes === 1 ? '' : 's'}.`, 'LOGIN_LOCKED'),
+      { retryAfter: lock.retryAfter }
+    );
+  }
+
+  const account = await loadAccount(email);
   const known = account !== null;
   const ok = await verifyPassword(password, known ? account.password_hash : DUMMY_HASH);
   if (!known || !ok) {
+    await recordAttempt(email, ip, false);
+    await recordAudit({ actorId: known ? account.id : null, actorEmail: email, action: 'login_failed', entityType: 'session', ip, summary: { reason: 'invalid_credentials' } });
     throw new ApiError(401, 'Invalid e-mail or password', 'INVALID_CREDENTIALS');
   }
+  await recordAttempt(email, ip, true);
+  await query('update public.app_users set last_login_at = now() where id = $1', [account.id]);
+  await recordAudit({ user: account, action: 'login', entityType: 'session', ip });
+
   if (redirected) {
-    // The scripted login: the cookie is the session, and the crawler follows
-    // the redirect into the SPA it was pointed at (W16).
-    setSessionCookie(res, req, signToken({ sub: account.id, email: account.email }), Math.round(sessionTtlHours() * 3600));
-    return res.redirect(302, '/');
+    await startSession(res, req, account, { withCookie: true });
+    return res.redirect(302, account.must_change_password ? '/change-password' : '/');
   }
-  return sendJson(res, 200, sessionPayload(res, req, account));
+  return sendJson(res, 200, await startSession(res, req, account));
 });
 
-// A syntactically valid scrypt record that nothing is expected to match: it
-// keeps the "unknown account" branch as expensive as the "wrong password" one.
-const DUMMY_HASH = 'scrypt$16384$8$1$ZHVtbXktc2FsdC1mb3ItY29uc3RhbnQt$ZHVtbXktc2FsdC1mb3ItY29uc3RhbnQt';
-
-// GET /session — W15. requireAuth has already re-read the roles from the
-// database; this endpoint just shows the caller what the API will answer with.
 const handleSession = (req, res) => {
   sendJson(res, 200, {
-    user: { id: req.user.id, email: req.user.email, roles: req.user.roles },
+    user: {
+      id: req.user.id,
+      email: req.user.email,
+      roles: req.user.roles,
+      is_doctor: req.user.is_doctor,
+      must_change_password: req.user.must_change_password,
+    },
     roles: req.user.roles,
   });
 };
 
-// POST /signup — W18. The new account is immediately usable: the response
-// carries a full session, and the account already holds the 'user' role.
+// POST /signup — only with ALLOW_SELF_SIGNUP. The account gets NO role: a
+// self-registered stranger must never see patient data. An admin grants a
+// role in Settings -> Users.
 const handleSignup = asyncHandler(async (req, res) => {
-  const { identifier, password } = await readCredentials(req);
-  if (!identifier || typeof password !== 'string' || password === '') {
-    throw badRequest('email and password are required');
+  if (!selfSignupEnabled()) {
+    throw new ApiError(403, 'Self sign-up is disabled. Ask an administrator for an account.', 'SIGNUP_DISABLED');
   }
-  const { email, password: plain } = validateEmailPassword(identifier, password);
-  const created = await createAccount(email, plain, 'user');
+  const { identifier, password } = await readCredentials(req);
+  if (!identifier || typeof password !== 'string' || password === '') throw badRequest('email and password are required');
+  const email = validateEmail(identifier);
+  validateNewPassword(password, email);
+  const created = await createAccount(email, password, null);
   if (!created) throw new ApiError(409, 'An account with this e-mail already exists', 'EMAIL_TAKEN');
-  return sendJson(res, 200, sessionPayload(res, req, created));
+  await recordAudit({ actorId: created.id, actorEmail: email, action: 'create', entityType: 'user', entityId: created.id, ip: clientIp(req), summary: { via: 'self_signup' } });
+  return sendJson(res, 201, { user: { id: created.id, email, roles: [] }, roles: [], message: 'Account created. An administrator must assign a role before you can sign in to the app.' });
 });
 
-// POST /logout — clears the cookie. The bearer token needs no logout: the
-// SPA throws it away, and it is worthless once it does (api/lib/tokens.mjs).
-const handleLogout = (req, res) => {
-  clearSessionCookie(res, req);
-  sendJson(res, 200, { ok: true, message: 'The session cookie has been cleared' });
-};
-
-// POST /admin/users — admin-only account creation (S32). The caller picks the
-// role from the enum; 'user' is the default, matching signup.
-const handleAdminCreateUser = asyncHandler(async (req, res) => {
-  const body = await readJsonBody(req);
-  const identifier = readField(body, IDENTITY_FIELDS);
-  const password = readField(body, PASSWORD_FIELDS);
-  const { email, password: plain } = validateEmailPassword(identifier, password);
-  const role = body.role === undefined ? 'user' : body.role === null ? null : String(body.role);
-  if (role !== null && !GRANTABLE_ROLES.includes(role)) {
-    throw badRequest(`role must be one of ${GRANTABLE_ROLES.join(', ')}`);
+// POST /logout — revokes the server-side session and clears the cookie.
+const handleLogout = asyncHandler(async (req, res) => {
+  // CSRF: a cookie-only logout must be a JSON request (a cross-site form
+  // cannot send that); a bearer token or no credential at all is fine.
+  const bearer = /^\s*bearer\s+\S+/i.test(String(req.headers.authorization ?? ''));
+  if (!bearer && readSessionToken(req) && req.jsonContentType !== true) {
+    throw new ApiError(403, 'Cookie-authenticated requests must send Content-Type: application/json', 'CSRF');
   }
-  const created = await createAccount(email, plain, role);
+  let user = null;
+  try {
+    user = await resolveUser(req, { allowPendingPasswordChange: true });
+  } catch {
+    /* an expired or unknown session logs out all the same */
+  }
+  const sid = presentedSid(req);
+  if (sid) await revokeSession(sid);
+  if (user) await recordAudit({ user, action: 'logout', entityType: 'session', ip: clientIp(req) });
+  clearSessionCookie(res, req);
+  sendJson(res, 200, { ok: true, message: 'Signed out' });
+});
+
+// POST /change-password — verifies the current password, applies the policy,
+// clears a forced change, revokes every other session and starts a new one.
+const handleChangePassword = asyncHandler(async (req, res) => {
+  const body = (await readJsonBody(req)) ?? {};
+  const current = typeof body.current_password === 'string' ? body.current_password : '';
+  const next = typeof body.new_password === 'string' ? body.new_password : '';
+  if (!current || !next) throw badRequest('current_password and new_password are required');
+  const account = await loadAccount(req.user.email);
+  if (!account || !(await verifyPassword(current, account.password_hash))) {
+    throw new ApiError(401, 'The current password is not correct', 'INVALID_CREDENTIALS');
+  }
+  if (current === next) throw badRequest('The new password must be different from the current one', 'WEAK_PASSWORD');
+  validateNewPassword(next, account.email);
+  const hash = await hashPassword(next);
+  await query('update public.app_users set password_hash = $2, must_change_password = false, password_changed_at = now() where id = $1', [account.id, hash]);
+  await revokeUserSessions(account.id);
+  await recordAudit({ user: account, action: 'update', entityType: 'user', entityId: account.id, ip: clientIp(req), summary: { fields: ['password'] } });
+  const fresh = await loadAccount(account.email);
+  return sendJson(res, 200, await startSession(res, req, fresh));
+});
+
+const handleFeatures = (req, res) => sendJson(res, 200, features());
+
+// --- self-service reset (only with e-mail configured) ---------------------------
+
+const hashToken = (token) => createHash('sha256').update(token, 'utf8').digest('hex');
+
+function resetEmailHtml(link) {
+  return `<!doctype html><html><body style="font-family:system-ui,sans-serif;color:#111">
+<p>A password reset was requested for your ${escapeHtml(PRODUCT_NAME)} account at ${escapeHtml(CLINIC_NAME)}.</p>
+<p><a href="${escapeHtml(link)}">Choose a new password</a> (the link works once and expires in ${RESET_TOKEN_MINUTES} minutes).</p>
+<p>If you did not ask for this, ignore this e-mail; your password stays unchanged.</p>
+</body></html>`;
+}
+
+const handleResetRequest = asyncHandler(async (req, res) => {
+  if (!passwordResetEmailEnabled()) throw new ApiError(404, 'Password reset by e-mail is not enabled on this server', 'FEATURE_DISABLED');
+  const body = (await readJsonBody(req)) ?? {};
+  const email = normalizeEmail(body.email).slice(0, 254);
+  const ip = clientIp(req);
+  // Same answer whether or not the account exists. Requests share the login
+  // throttle, so this cannot be used to spam a mailbox.
+  const lock = await checkLogin(`reset:${email}`, ip);
+  if (EMAIL_RE.test(email) && !lock.locked) {
+    await recordAttempt(`reset:${email}`, ip, false);
+    const account = await loadAccount(email);
+    if (account) {
+      const token = randomBytes(32).toString('base64url');
+      await query('update public.password_reset_tokens set used_at = now() where user_id = $1 and used_at is null', [account.id]);
+      await query(
+        `insert into public.password_reset_tokens (user_id, token_hash, expires_at)
+         values ($1, $2, now() + make_interval(mins => $3))`,
+        [account.id, hashToken(token), RESET_TOKEN_MINUTES]
+      );
+      const base = String(process.env.APP_BASE_URL ?? '').replace(/\/+$/, '') || `${req.protocol}://${req.get('host')}`;
+      const link = `${base}/reset-password?token=${encodeURIComponent(token)}`;
+      const from = String(process.env.RESEND_FROM_SYSTEM ?? process.env.RESEND_FROM_INVOICE ?? '').trim();
+      const { error } = await sendEmail({ from, to: [account.email], subject: `${PRODUCT_NAME}: reset your password`, html: resetEmailHtml(link) });
+      if (error) console.error(`auth: password reset mail failed: ${error.message}`);
+      await recordAudit({ user: account, action: 'update', entityType: 'user', entityId: account.id, ip, summary: { password_reset: 'requested' } });
+    }
+  }
+  return sendJson(res, 202, { ok: true });
+});
+
+const handleResetConfirm = asyncHandler(async (req, res) => {
+  const body = (await readJsonBody(req)) ?? {};
+  const token = typeof body.token === 'string' ? body.token.trim() : '';
+  const next = typeof body.new_password === 'string' ? body.new_password : '';
+  if (!token || token.length > 200 || !next) throw badRequest('token and new_password are required');
+  const { rows } = await query(
+    `select t.id, t.user_id, u.email from public.password_reset_tokens t
+       join public.app_users u on u.id = t.user_id
+      where t.token_hash = $1 and t.used_at is null and t.expires_at > now()`,
+    [hashToken(token)]
+  );
+  const row = rows[0];
+  if (!row) throw badRequest('This reset link is invalid or has expired', 'INVALID_TOKEN');
+  validateNewPassword(next, row.email);
+  const hash = await hashPassword(next);
+  await tx(async (client) => {
+    const used = await client.query('update public.password_reset_tokens set used_at = now() where id = $1 and used_at is null returning id', [row.id]);
+    if (!used.rowCount) throw badRequest('This reset link is invalid or has expired', 'INVALID_TOKEN');
+    await client.query('update public.app_users set password_hash = $2, must_change_password = false, password_changed_at = now() where id = $1', [row.user_id, hash]);
+    await revokeUserSessions(row.user_id, { db: client });
+    await recordAudit({ db: client, actorId: row.user_id, actorEmail: row.email, action: 'update', entityType: 'user', entityId: row.user_id, ip: clientIp(req), summary: { password_reset: 'completed' } });
+  });
+  return sendJson(res, 200, { ok: true });
+});
+
+// --- admin ----------------------------------------------------------------------
+
+// POST /admin/users — the account must change its password at first sign-in.
+const handleAdminCreateUser = asyncHandler(async (req, res) => {
+  const body = (await readJsonBody(req)) ?? {};
+  const identifier = readField(body, IDENTITY_FIELDS);
+  const password = PASSWORD_FIELDS.map((n) => body?.[n]).find((v) => typeof v === 'string' && v !== '') ?? '';
+  const email = validateEmail(identifier ?? '');
+  validateNewPassword(password, email);
+  const role = body.role === undefined ? 'user' : body.role === null ? null : String(body.role);
+  if (role !== null && !GRANTABLE_ROLES.includes(role)) throw badRequest(`role must be one of ${GRANTABLE_ROLES.join(', ')}`);
+  const created = await createAccount(email, password, role, { mustChange: true });
   if (!created) throw new ApiError(409, 'An account with this e-mail already exists', 'EMAIL_TAKEN');
+  await recordAudit({ user: req.user, action: 'create', entityType: 'user', entityId: created.id, ip: clientIp(req), summary: { role } });
   return sendJson(res, 200, { user: { id: created.id, email: created.email, roles: created.roles }, roles: created.roles });
 });
 
-// The router. It is stateless, so api/routes/index.mjs may mount the single
-// exported instance, like every other route file.
+// A readable temporary password: 4 groups of 4 from an unambiguous alphabet
+// (about 80 bits), e.g. "kq7m-x2pd-9fhw-c4tz".
+export function temporaryPassword() {
+  const alphabet = 'abcdefghjkmnpqrstuvwxyz23456789';
+  const bytes = randomBytes(16);
+  let out = '';
+  for (let i = 0; i < 16; i++) {
+    if (i && i % 4 === 0) out += '-';
+    out += alphabet[bytes[i] % alphabet.length];
+  }
+  return out;
+}
+
+// POST /admin/users/:id/reset-password — temporary password, forced change,
+// every session of that user revoked.
+const handleAdminResetPassword = asyncHandler(async (req, res) => {
+  const id = String(req.params.id ?? '');
+  if (!UUID_RE.test(id)) throw badRequest('user id must be a uuid');
+  const account = await loadAccountById(id);
+  if (!account) throw new ApiError(404, 'No such user', 'NOT_FOUND');
+  const temp = temporaryPassword();
+  const hash = await hashPassword(temp);
+  await query('update public.app_users set password_hash = $2, must_change_password = true, password_changed_at = now() where id = $1', [id, hash]);
+  await revokeUserSessions(id);
+  await recordAudit({ user: req.user, action: 'update', entityType: 'user', entityId: id, ip: clientIp(req), summary: { password_reset: 'admin_temporary' } });
+  return sendJson(res, 200, { temporary_password: temp, must_change_password: true });
+});
+
 export function createAuthRouter() {
   const router = express.Router();
-
-  // login accepts a form by contract; it mutates no caller data, so the JSON
-  // guard does not apply to it (and must not — a crawler posts urlencoded).
   router.get('/login', handleLoginPage);
   router.post('/login', handleLogin);
   router.post('/signup', handleSignup);
-  router.post('/logout', requireOptionalAuth, requireJsonMutation, handleLogout);
+  router.post('/logout', handleLogout);
+  router.get('/features', handleFeatures);
+  router.post('/password-reset/request', handleResetRequest);
+  router.post('/password-reset/confirm', handleResetConfirm);
 
-  router.get('/session', requireAuth, handleSession);
+  router.get('/session', requireAuthAllowPending, handleSession);
+  router.post('/change-password', requireAuthAllowPending, requireJsonMutation, handleChangePassword);
 
-  // admin-only: requireAuth answers 401 for no/forged/expired session,
-  // requireRole answers 403 FORBIDDEN for a signed-in non-admin (W17 pattern).
   router.post('/admin/users', requireAuth, requireJsonMutation, requireRole('admin'), handleAdminCreateUser);
+  router.post('/admin/users/:id/reset-password', requireAuth, requireJsonMutation, requireRole('admin'), handleAdminResetPassword);
 
   return router;
 }

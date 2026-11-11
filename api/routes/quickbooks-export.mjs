@@ -42,12 +42,13 @@
 // multiplicity are unchanged.
 
 import { Router } from 'express';
+import { clientIp, recordAudit } from '../lib/audit.mjs';
 
 import { asyncHandler, sendJson } from '../lib/http.mjs';
 import { requireAuth, requireRole } from '../lib/session.mjs';
 import { csvRaw, csvHeaderRow, csvRow } from '../lib/csv.mjs';
 import { legacyDate } from '../lib/format.mjs';
-import { fetchInvoiceExport, fetchPaymentExport, parseDateRange } from '../queries/exports.mjs';
+import { fetchInvoiceExport, fetchPaymentExport, fetchExpenseExport, parseDateRange } from '../queries/exports.mjs';
 
 // The header arrays, copied from the shipped function (the join+newline now
 // lives in csvHeaderRow).
@@ -121,6 +122,21 @@ export function buildInvoicesCsv(invoices, { startDate, endDate }) {
   return csvContent;
 }
 
+// buildExpensesCsv(rows): one row per expense. Unlike the hosted version
+// (which repeated the category in the Vendor column) the vendor is left for
+// the accountant; every text cell goes through csvCell (formula-safe).
+export const EXPENSE_CSV_HEADERS = ['Date', 'Category', 'Description', 'Amount', 'Reference', 'Notes'];
+export function buildExpensesCsv(expenses) {
+  let csvContent = csvHeaderRow(EXPENSE_CSV_HEADERS);
+  for (const e of expenses ?? []) {
+    const day = String(e.expense_date ?? '').slice(0, 10);
+    const [y, m, d] = day.split('-');
+    const date = y && m && d ? `${Number(m)}/${Number(d)}/${y}` : '';
+    csvContent += csvRow([date, e.category ?? '', e.description ?? '', Number(e.amount), e.reference || '', e.notes || '']) + '\n';
+  }
+  return csvContent;
+}
+
 // buildPaymentsCsv(rows, startDate, endDate): the shipped function's payments
 // body, same fixes. One row per payment.
 export function buildPaymentsCsv(payments, { startDate, endDate }) {
@@ -158,7 +174,9 @@ export const router = Router();
 router.post(
   '/',
   requireAuth,
-  requireRole('admin', 'moderator', 'user'),
+  // Financial exports are for the finance roles (the Exports page is
+  // admin-only in the UI); clinical staff have no business bulk-exporting.
+  requireRole('admin', 'moderator'),
   asyncHandler(async (req, res) => {
     // The shipped function read the whole body as JSON and destructured these
     // three; a missing key is undefined and lands in the same branch below.
@@ -166,7 +184,7 @@ router.post(
 
     // Legacy order of decisions: the export type is checked first, exactly as
     // the shipped if/else threw 'Invalid export type' as a 500.
-    if (exportType !== 'invoices' && exportType !== 'payments') {
+    if (exportType !== 'invoices' && exportType !== 'payments' && exportType !== 'expenses') {
       return sendJson(res, 500, { error: 'Invalid export type' });
     }
 
@@ -180,10 +198,14 @@ router.post(
       if (exportType === 'invoices') {
         const invoices = await fetchInvoiceExport(range);
         csv = buildInvoicesCsv(invoices, { startDate, endDate });
-      } else {
+      } else if (exportType === 'payments') {
         const payments = await fetchPaymentExport(range);
         csv = buildPaymentsCsv(payments, { startDate, endDate });
+      } else {
+        const expenses = await fetchExpenseExport(range);
+        csv = buildExpensesCsv(expenses);
       }
+      await recordAudit({ user: req.user, action: 'export', entityType: exportType, ip: clientIp(req), summary: { startDate: String(startDate).slice(0, 30), endDate: String(endDate).slice(0, 30), lines: csv.split('\n').length - 2 } });
     } catch (e) {
       // Legacy contract: an unexpected failure answers 500 with the flat
       // {"error": "<message>"} body the shipped catch wrote.

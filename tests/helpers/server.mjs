@@ -41,6 +41,7 @@ export function startServer({
     // back on. The server's own default stays "seed on": a bare
     // `node api/server.mjs` must always come up with its staff accounts.
     SEED_ACCOUNTS: '0',
+    SEED_FORCE_PASSWORD_CHANGE: '0',
     ...env,
   };
   const argv = ['api/server.mjs'];

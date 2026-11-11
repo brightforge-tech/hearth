@@ -457,14 +457,12 @@ export default [
       assert.equal(wrong.error.code, 'INVALID_CREDENTIALS', `expected INVALID_CREDENTIALS, got ${JSON.stringify(wrong.error)}`);
       assert.ok(wrong.error.message.length > 0);
 
-      // signUp creates the account and signs straight in (no mail, W18 contract)
+      // self sign-up is off by default: staff accounts are created by an admin
       const { data: up, error: upErr } = await client().auth.signUp({ email: 'newpatient@t8.test', password: 'NewPatient#2025' });
-      assert.equal(upErr, null, upErr?.message);
-      assert.ok(up.session?.access_token, 'signUp must return a usable session');
-      assert.equal(up.user.email, 'newpatient@t8.test');
-      // and the new 'user' can immediately use the API: reading their own list works
-      const row = await db.query('select roles from (select id from public.app_users where email=$1) x join lateral (select array_agg(role::text) as roles from public.user_roles where user_id=x.id) y on true', ['newpatient@t8.test']);
-      assert.deepEqual(row.rows[0].roles, ['user']);
+      assert.ok(upErr, 'signUp must fail while ALLOW_SELF_SIGNUP is off');
+      assert.equal(up.session ?? null, null);
+      const row = await db.query('select count(*)::int as n from public.app_users where email = $1', ['newpatient@t8.test']);
+      assert.equal(row.rows[0].n, 0);
       void baseUrl;
     }),
   },

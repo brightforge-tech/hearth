@@ -26,6 +26,7 @@ import assert from 'node:assert/strict';
 import { buildReceiptHtml, receiptEmailSubject } from '../legacy/send-receipt-email.legacy.mjs';
 import { createScratch, dropScratch, connectDb, loadFixtures, seedFixtures } from '../helpers/db.mjs';
 import { startTestApp, makeTokens, CONTRACT_SENDERS } from '../helpers/http.mjs';
+import { ensureTestSessions } from '../helpers/session.mjs';
 
 const SCRATCH = '_c14rcpt';
 const JWT_SECRET = 'c14-contract-receipt-email-secret-01';
@@ -46,6 +47,7 @@ async function withContractApp({ root, testUrl }, fn) {
       `insert into public.user_roles (user_id, role)
        values ('00000000-0000-4000-e000-000000000003', 'admin')`
     );
+    await ensureTestSessions(db);
     const tokens = makeTokens(JWT_SECRET, [{ key: 'admin', id: '00000000-0000-4000-e000-000000000003', email: 'admin@c14.test' }]);
     try {
       return await fn({ app, db, fixtures, admin: tokens.admin });

@@ -54,6 +54,11 @@ export const DEFAULT_SEED_ACCOUNTS = Object.freeze([
   }),
 ]);
 
+export function forcePasswordChange(env = process.env) {
+  const raw = String(env.SEED_FORCE_PASSWORD_CHANGE ?? '').trim().toLowerCase();
+  return !['0', 'false', 'no', 'off'].includes(raw);
+}
+
 // seedAccountsEnabled(env): on unless explicitly disabled.
 export function seedAccountsEnabled(env = process.env) {
   const raw = String(env.SEED_ACCOUNTS ?? '').trim().toLowerCase();
@@ -98,7 +103,13 @@ export async function seedAccounts({ env = process.env, log = () => {}, query } 
     }
     if ((await userIdFor(query, email)) === null) {
       const hash = await hashPassword(String(password));
-      await query('insert into public.app_users (email, password_hash) values ($1, $2) on conflict (email) do nothing', [email, hash]);
+      // Seeded passwords are known to whoever read the configuration, so the
+      // account must choose its own at first sign-in (SEED_FORCE_PASSWORD_CHANGE=0
+      // switches that off, e.g. for automated test environments).
+      await query(
+        'insert into public.app_users (email, password_hash, must_change_password) values ($1, $2, $3) on conflict (email) do nothing',
+        [email, hash, forcePasswordChange(env)]
+      );
       created.push(spec.key);
     } else {
       existing.push(spec.key);

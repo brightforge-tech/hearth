@@ -32,9 +32,9 @@ const ROLELESS = { id: '44444444-4444-4444-8444-444444444444', email: 'r@t7.test
 
 export default [
   {
-    name: 'the matrix covers the nine policy-bearing tables x four verbs',
+    name: 'the matrix covers the eleven policy-bearing tables x four verbs',
     fn: () => {
-      assert.deepEqual(TABLES, ['clinic_settings', 'patients', 'appointments', 'visit_notes', 'services', 'invoices', 'invoice_items', 'payments', 'user_roles']);
+      assert.deepEqual(TABLES, ['clinic_settings', 'patients', 'appointments', 'visit_notes', 'services', 'invoices', 'invoice_items', 'payments', 'user_roles', 'expenses', 'booking_requests']);
       for (const table of TABLES) {
         for (const verb of VERBS) {
           assert.ok(Object.prototype.hasOwnProperty.call(POLICIES[table], verb), `${table}.${verb} is missing from POLICIES`);
@@ -105,14 +105,14 @@ export default [
     },
   },
   {
-    name: 'the anonymous allow-list is exactly the landing services read and the intake patient insert',
+    name: 'the anonymous allow-list is exactly the landing services read (no anonymous patient insert)',
     fn: () => {
       assert.equal(anonAllow('services', 'select'), true);
-      assert.equal(anonAllow('patients', 'insert'), true);
+      assert.equal(anonAllow('patients', 'insert'), false);
       for (const table of TABLES) {
         for (const verb of VERBS) {
           const allowed = anonAllow(table, verb);
-          assert.equal(allowed, table === 'services' ? verb === 'select' : table === 'patients' ? verb === 'insert' : false,
+          assert.equal(allowed, table === 'services' ? verb === 'select' : false,
             `anon ${table}.${verb} must be ${table}.${verb} allow-listed`);
         }
       }
@@ -234,6 +234,43 @@ export default [
       assert.equal(isStaff(ADMIN), false);
       assert.equal(isStaff(ROLELESS), false);
       assert.equal(isStaff(null), false);
+    },
+  },
+  {
+    name: 'expenses are for the finance roles only (admin, moderator); clinical staff are denied; delete is admin-only',
+    fn: () => {
+      for (const verb of ['select', 'insert', 'update']) {
+        assert.equal(can(ADMIN, 'expenses', verb), true);
+        assert.equal(can(MOD, 'expenses', verb), true);
+        assert.equal(can(STAFF, 'expenses', verb), false);
+      }
+      assert.equal(can(ADMIN, 'expenses', 'delete'), true);
+      assert.equal(can(MOD, 'expenses', 'delete'), false);
+      assert.equal(can(null, 'expenses', 'select'), false);
+      assert.match(denyReason(STAFF, 'expenses', 'select'), /admin, moderator/);
+      assert.equal(predicate(MOD, 'expenses', 'select'), null);
+    },
+  },
+  {
+    name: 'booking_requests are readable by every staff role but never writable through the generic route',
+    fn: () => {
+      for (const user of [ADMIN, MOD, STAFF]) {
+        assert.equal(can(user, 'booking_requests', 'select'), true);
+        for (const verb of ['insert', 'update', 'delete']) assert.equal(can(user, 'booking_requests', verb), false);
+      }
+      assert.equal(anonAllow('booking_requests', 'insert'), false);
+      assert.equal(anonAllow('booking_requests', 'select'), false);
+    },
+  },
+  {
+    name: 'security tables (audit_log, sessions, login attempts, reset tokens, app_users) have no policy at all',
+    fn: () => {
+      for (const table of ['audit_log', 'app_sessions', 'login_attempts', 'password_reset_tokens', 'app_users', 'hh_outbox', 'storage_objects']) {
+        for (const verb of VERBS) {
+          assert.equal(can(ADMIN, table, verb), false, `${table}.${verb}`);
+          assert.equal(anonAllow(table, verb), false, `anon ${table}.${verb}`);
+        }
+      }
     },
   },
 ];

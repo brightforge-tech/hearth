@@ -62,6 +62,7 @@ import { ApiError, asyncHandler, sendJson } from '../lib/http.mjs';
 import { combineAnd, compileFilters, FilterError } from '../lib/filters.mjs';
 import { MAX_DEPTH, parseSelect, SpecError } from '../lib/sql-spec.mjs';
 import { requireOptionalAuth } from '../lib/session.mjs';
+import { AUDITED_WRITE_TABLES, auditMany, clientIp } from '../lib/audit.mjs';
 
 // What a caller may ask for, and how much of it. MAX_ROWS mirrors the hosted
 // PostgREST row cap, so a page that silently relied on "all rows" sees the same
@@ -384,6 +385,7 @@ export async function handleQuery(req, res) {
   // 2. session
   const user = req.user ?? null; // requireOptionalAuth: the session, or null
   if (!user && !anonAllow(table, verb)) {
+    if (req.authError) throw req.authError;
     throw new ApiError(401, 'A session is required: send Authorization: Bearer <token>', 'UNAUTHORIZED');
   }
 
@@ -433,6 +435,9 @@ export async function handleQuery(req, res) {
     const where = combineAnd([policyUsing, filterWhere]);
     const statement = selectStatement({ catalog, table: meta, tree, where, orderBy, limit, offset });
     const { rows } = await query(statement.text, statement.params);
+    if (user && rows.length) {
+      await auditRead({ req, user, table, tree, body, where, orderBy, limit, offset, meta, count: rows.length });
+    }
     return sendJson(res, 200, shape(await rowsOf(rows), { single, maybeSingle }));
   }
 
@@ -472,6 +477,14 @@ export async function handleQuery(req, res) {
       // The row the caller asked for is outside what the policy permits — the
       // same thing a WITH CHECK violation means in Postgres.
       throw new ApiError(403, denyReason(user, table, policyVerb), 'FORBIDDEN');
+    }
+    // The audit row is written in the same transaction as the change: a write
+    // that is not audited does not happen.
+    const entityType = AUDITED_WRITE_TABLES[table];
+    if (entityType && written.ids.length) {
+      const action = verb === 'delete' ? 'delete' : verb === 'update' ? 'update' : 'create';
+      const summary = verb === 'delete' ? null : { fields: prepared?.names ?? [], ...(verb === 'upsert' ? { upsert: true } : {}) };
+      await auditMany({ db: client, user, action, entityType, ids: written.ids, ip: clientIp(req), summary });
     }
     return written.rows;
   });
@@ -580,6 +593,7 @@ async function writeStatement(client, { catalog, table, tree, verb, where, filte
     statementParams.push(...check.params);
   }
   ctes.push(`"hh_rows" as (select ${projectionSql(catalog, table, tree)} as "hh_row" from "hh_written" as ${quoteIdent(alias)})`);
+  const hasId = table.columns.has('id');
 
   // With no WITH CHECK fragment there is no "hh_denied" CTE, and the answer is
   // a compile-time zero.
@@ -588,10 +602,72 @@ async function writeStatement(client, { catalog, table, tree, verb, where, filte
     : `0::int`;
   const text = `with ${ctes.join(',\n')}\n` +
     `select ${deniedExpr} as "hh_denied",\n` +
-    `       coalesce((select json_agg("hh_row") from "hh_rows"), '[]'::json) as "hh_rows"`;
+    `       coalesce((select json_agg("hh_row") from "hh_rows"), '[]'::json) as "hh_rows"` +
+    (hasId ? `,\n       coalesce((select json_agg("id") from "hh_written"), '[]'::json) as "hh_ids"` : '');
   const result = await client.query(text, statementParams);
   const row = result.rows[0] ?? {};
-  return { denied: Number(row.hh_denied ?? 0), rows: Array.isArray(row.hh_rows) ? row.hh_rows : [] };
+  return {
+    denied: Number(row.hh_denied ?? 0),
+    rows: Array.isArray(row.hh_rows) ? row.hh_rows : [],
+    ids: Array.isArray(row.hh_ids) ? row.hh_ids : [],
+  };
+}
+
+// --- audited reads -----------------------------------------------------------
+//
+// Opening an individual patient record, a visit note or an appointment's
+// intake notes is recorded in the audit log ('view'). List screens that only
+// show names are not logged row by row (that would bury the log); a read is
+// "individual" when it asks for one row (single/maybeSingle) or filters on the
+// id. Clinical notes are logged whenever they are read.
+
+function treeHasColumn(tree, column) {
+  return tree.fields.some((n) => n.kind === 'all' || (n.kind === 'field' && n.column === column));
+}
+
+function treeEmbeds(tree, table) {
+  return tree.fields.some((n) => n.kind !== 'all' && n.kind !== 'field' && (n.table === table || treeEmbeds(n.children, table)));
+}
+
+function filtersOnId(body) {
+  const f = body.filters;
+  if (!f || typeof f !== 'object') return false;
+  return Object.prototype.hasOwnProperty.call(f, 'id');
+}
+
+export async function auditRead({ req, user, table, tree, body, where, orderBy, limit, offset, meta, count }) {
+  const individual = body.single === true || body.maybeSingle === true || filtersOnId(body);
+  const targets = [];
+  if (table === 'patients' && individual) targets.push({ entityType: 'patient', summary: null });
+  if (table === 'visit_notes') targets.push({ entityType: 'visit_note', summary: null });
+  if (table === 'appointments' && treeHasColumn(tree, 'intake_notes') && count > 0) {
+    targets.push({ entityType: 'intake_note', summary: individual ? null : { list: true } });
+  }
+  if (table === 'appointments' && treeEmbeds(tree, 'visit_notes')) {
+    targets.push({ entityType: 'visit_note', summary: { via: 'appointments' } });
+  }
+  if (table === 'patients' && individual && treeEmbeds(tree, 'appointments')) {
+    targets.push({ entityType: 'patient_history', summary: null });
+  }
+  if (!targets.length || !meta.columns.has('id')) return;
+  // the ids of exactly the rows the caller received (same where/order/page)
+  const params = [...(where ? where.params : [])];
+  const sql = [`select ${quoteIdent(table)}.${quoteIdent('id')} as id from ${quoteIdent('public')}.${quoteIdent(table)} as ${quoteIdent(table)}`];
+  if (where && where.sql) sql.push(`where ${where.sql}`);
+  if (orderBy) sql.push(`order by ${orderBy}`);
+  if (limit !== undefined && limit !== null) {
+    params.push(limit);
+    sql.push(`limit $${params.length}`);
+  }
+  if (offset) {
+    params.push(offset);
+    sql.push(`offset $${params.length}`);
+  }
+  const { rows } = await query(sql.join('\n'), params);
+  const ids = rows.map((r) => r.id);
+  for (const t of targets) {
+    await auditMany({ user, action: 'view', entityType: t.entityType, ids, ip: clientIp(req), summary: t.summary, cap: 25 });
+  }
 }
 
 // The router: one POST, behind requireOptionalAuth so a session is read when

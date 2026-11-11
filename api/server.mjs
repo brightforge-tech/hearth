@@ -63,7 +63,10 @@ export function parseArgs(argv = [], env = process.env) {
     err.code = 'BAD_PORT';
     throw err;
   }
-  return { port, host: out.host ?? '0.0.0.0', help: out.help };
+  // Bind to loopback unless told otherwise: put a TLS reverse proxy in front,
+  // or set HOST=0.0.0.0 inside a container.
+  const host = out.host ?? (env.HOST && String(env.HOST).trim() !== '' ? String(env.HOST).trim() : '127.0.0.1');
+  return { port, host, help: out.help };
 }
 
 const HELP = `Hearth API — serves the built SPA and /api on one port
@@ -71,7 +74,7 @@ const HELP = `Hearth API — serves the built SPA and /api on one port
 usage: node api/server.mjs [--port <n>] [--host <addr>]
 
   --port, -p <n>    port to listen on (default: $PORT, else 8787; 0 = ephemeral)
-  --host <addr>     address to bind (default: 0.0.0.0)
+  --host <addr>     address to bind (default: $HOST, else 127.0.0.1)
 
 configuration comes from the environment and .env — see .env.example.`;
 
@@ -142,7 +145,7 @@ export async function bootstrap({ env = process.env, log = console.log } = {}) {
 // startServer({port, host, env, distDir, log}): the app from api/routes/index.mjs
 // plus the startup sequence above; resolves once the port is actually open, with
 // the port that was bound (which is not `port` when 0 was asked for).
-export async function startServer({ port, host = '0.0.0.0', env = process.env, distDir, log = console.log } = {}) {
+export async function startServer({ port, host = '127.0.0.1', env = process.env, distDir, log = console.log } = {}) {
   const app = await createApp({ distDir, env, log });
   const server = createServer(app);
   await new Promise((resolve, reject) => {

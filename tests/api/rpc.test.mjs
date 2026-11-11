@@ -23,7 +23,7 @@
 
 import pg from 'pg';
 
-import { signToken } from '../../api/lib/tokens.mjs';
+import { signTestToken as signToken, ensureTestSessions } from '../helpers/session.mjs';
 import { request, startServer } from '../helpers/server.mjs';
 
 const SCRATCH = '_t6';
@@ -105,6 +105,7 @@ async function withApi({ root, testUrl, seed = {} }, fn) {
       if (role) await db.query('insert into public.user_roles (user_id, role) values ($1, $2)', [user.id, role]);
       users[alias] = { ...user, role };
     }
+    await ensureTestSessions(db);
 
     const api = {
       db,
@@ -207,7 +208,7 @@ export default [
             const row = byEmail[`${alias}@t6.test`];
             if (!row) throw new Error(`${alias}@t6.test is missing from ${JSON.stringify(r.json)}`);
             const keys = Object.keys(row).sort();
-            if (keys.join(',') !== 'created_at,email,role,user_id') throw new Error(`${alias} has keys ${keys.join(',')}`);
+            if (keys.join(',') !== 'created_at,email,is_doctor,last_login_at,must_change_password,role,user_id') throw new Error(`${alias} has keys ${keys.join(',')}`);
             if (row.user_id !== api.users[alias].id) throw new Error(`${alias}: user_id ${row.user_id} is not the account's id`);
             if (!UUID_RE.test(row.user_id)) throw new Error(`${alias}: user_id ${row.user_id} is not a uuid`);
             if (typeof row.created_at !== 'string' || Number.isNaN(Date.parse(row.created_at))) {

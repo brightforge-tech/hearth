@@ -34,7 +34,9 @@
 
 import { Router } from 'express';
 
-import { asyncHandler, sendJson } from '../lib/http.mjs';
+import { ApiError, asyncHandler, sendJson } from '../lib/http.mjs';
+import { emailEnabled } from '../lib/features.mjs';
+import { clientIp, recordAudit } from '../lib/audit.mjs';
 import { requireAuth, requireRole } from '../lib/session.mjs';
 import { buildReceiptEmailHtml, receiptEmailSubject } from '../lib/email-receipt.mjs';
 import { receiptSender, sendEmail } from '../lib/resend.mjs';
@@ -46,6 +48,10 @@ router.post(
   '/',
   requireAuth,
   requireRole('admin', 'moderator', 'user'),
+  // E-mail is an optional integration (off unless RESEND_API_KEY is set): it
+  // sends patient details to a third party, so it must be switched on
+  // deliberately. Without it the endpoint answers 503 and contacts nobody.
+  (req, res, next) => (emailEnabled() ? next() : next(new ApiError(503, 'E-mail is not configured on this server', 'EMAIL_DISABLED'))),
   asyncHandler(async (req, res) => {
     // The shipped function destructured paymentId/recipientEmail (the
     // optional recipientName was accepted and unused) and validated exactly
@@ -72,6 +78,7 @@ router.post(
         html: buildReceiptEmailHtml(payment),
       });
       if (error) throw error;
+      await recordAudit({ user: req.user, action: 'export', entityType: 'payment', entityId: String(paymentId ?? ''), ip: clientIp(req), summary: { channel: 'email', provider: 'resend' } });
 
       return sendJson(res, 200, {
         success: true,

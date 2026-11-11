@@ -103,9 +103,9 @@ const BILLING_PAYMENTS =
   'appointment:appointments( patient:patients(first_name, last_name, email, phone, address) ) )';
 
 const QUEUE_APPOINTMENTS =
-  'id, scheduled_start, created_at, reason, patient_id, status, patient:patients(first_name,last_name)';
+  'id, scheduled_start, created_at, reason, intake_notes, patient_id, status, patient:patients(first_name,last_name)';
 
-const VISIT_APPOINTMENT = 'id, status, scheduled_start, patient:patients(first_name,last_name)';
+const VISIT_APPOINTMENT = 'id, status, scheduled_start, reason, intake_notes, patient:patients(first_name,last_name)';
 const VISIT_SERVICES = 'id, code, name, price, taxable, active';
 
 const TODAYS_SCHEDULE =
@@ -216,7 +216,7 @@ const QUERIES = [
     callers: ['staff', 'admin'],
     minRows: { staff: 1, admin: 1 },
     spec: {
-      columns: { id: s, scheduled_start: s, created_at: s, reason: s, patient_id: s, status: s },
+      columns: { id: s, scheduled_start: s, created_at: s, reason: s, intake_notes: s, patient_id: s, status: s },
       embeds: { patient: PATIENT_MIN },
     },
   },
@@ -228,7 +228,7 @@ const QUERIES = [
     callers: ['staff', 'admin'],
     minRows: { staff: 1, admin: 1 },
     spec: {
-      columns: { id: s, scheduled_start: s, created_at: s, reason: s, patient_id: s, status: s },
+      columns: { id: s, scheduled_start: s, created_at: s, reason: s, intake_notes: s, patient_id: s, status: s },
       embeds: { patient: PATIENT_MIN },
     },
   },
@@ -239,7 +239,7 @@ const QUERIES = [
     body: { filters: { id: ID.appt1 }, maybeSingle: true },
     callers: ['staff', 'admin'],
     single: true,
-    spec: { columns: { id: s, status: s, scheduled_start: s }, embeds: { patient: PATIENT_MIN } },
+    spec: { columns: { id: s, status: s, scheduled_start: s, reason: s, intake_notes: s }, embeds: { patient: PATIENT_MIN } },
   },
   {
     name: 'Visit service-by-code select (maybeSingle)',
@@ -404,7 +404,7 @@ function checkShape(row, spec, path, tables, table, errors) {
     if (key !== 'id' && !declared.has(key)) errors.push(`${path}.${key}: not declared in types.ts Table ${table} Row`);
     const value = row[key];
     if (value === null) {
-      if (key !== 'reference' && key !== 'description' && key !== 'reason' && key !== 'drivers_permit' && key !== 'notes') {
+      if (key !== 'reference' && key !== 'description' && key !== 'reason' && key !== 'drivers_permit' && key !== 'notes' && key !== 'intake_notes') {
         // every column this suite seeds carries a value; a null here means a
         // real type/serialization drift
         errors.push(`${path}.${key}: null where the fixture seeded a ${kind}`);
@@ -519,11 +519,8 @@ export default [
     }),
   },
   {
-    name: 'the LandingPage anonymous patients insert (the second landing query) answers with a full patients row',
+    name: 'the landing page can no longer insert a patient anonymously; its booking form posts a request that returns no data',
     fn: async (ctx) => withParityApp(ctx, async ({ app }) => {
-      // The booking dialog's first write, verbatim payload shape from
-      // LandingPage.tsx — allowed anonymously exactly as the hosted policy
-      // allows it, and the page then reads patient.id back out.
       const res = await app.api(
         '/api/query',
         {
@@ -535,14 +532,15 @@ export default [
         },
         null
       );
-      assert.equal(res.status, 200, res.text.slice(0, 300));
-      assert.equal(res.json.error, null);
-      const row = res.json.data;
-      for (const key of ['id', 'first_name', 'last_name', 'email', 'phone', 'created_at', 'national_id', 'address']) {
-        assert.ok(key in row, `the returned patients row is missing ${key}: ${Object.keys(row).join(', ')}`);
-      }
-      assert.equal(typeof row.id, 'string');
-      assert.equal(row.first_name, 'Rowan');
+      assert.equal(res.status, 401, res.text.slice(0, 300));
+      const day = new Date(Date.now() + 7 * 86400000).toISOString().slice(0, 10);
+      const booked = await app.api(
+        '/api/public/booking-requests',
+        { first_name: 'Rowan', last_name: 'Fields', email: 'rowan@p14.test', phone: '+1 555 0177', reason: 'Check-up', preferred_date: day, preferred_time: '10:00', website: '' },
+        null
+      );
+      assert.equal(booked.status, 202, booked.text.slice(0, 300));
+      assert.deepEqual(booked.json, { ok: true });
     }),
   },
   {
@@ -553,7 +551,7 @@ export default [
       assert.ok(Array.isArray(res.json), JSON.stringify(res.json).slice(0, 200));
       assert.ok(res.json.length >= 2, 'both seeded users appear');
       for (const row of res.json) {
-        assert.deepEqual(Object.keys(row).sort(), ['created_at', 'email', 'role', 'user_id']);
+        assert.deepEqual(Object.keys(row).sort(), ['created_at', 'email', 'is_doctor', 'last_login_at', 'must_change_password', 'role', 'user_id']);
         assert.equal(typeof row.user_id, 'string');
         assert.equal(typeof row.email, 'string');
         assert.equal(typeof row.role, 'string');

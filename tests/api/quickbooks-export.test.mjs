@@ -30,7 +30,7 @@
 
 import pg from 'pg';
 
-import { signToken } from '../../api/lib/tokens.mjs';
+import { signTestToken as signToken, ensureTestSessions } from '../helpers/session.mjs';
 import { request, startServer } from '../helpers/server.mjs';
 
 const SCRATCH = '_t10';
@@ -149,6 +149,7 @@ async function withApi({ root, testUrl, seed = {}, fixture = null }, fn) {
 
     const users = {};
     for (const [alias, role] of Object.entries(seed)) users[alias] = await insertUser(db, alias, role);
+    await ensureTestSessions(db);
 
     const fx = fixture ? await fixture(db) : {};
 
@@ -242,9 +243,10 @@ export default [
         const roleless = await api.export({ exportType: 'invoices', ...RANGE }, api.tokenFor(api.users.ghost));
         expectError(roleless, 403, 'NO_ROLE', { label: 'session with no user_roles row' });
 
-        // the normal path: all three app_role values pass requireRole, and the
-        // answer is the CSV, not JSON
-        for (const alias of ['boss', 'mod', 'nurse']) {
+        // the normal path: the finance roles pass requireRole and get the CSV;
+        // clinical staff ('user') are refused — exports are not their job
+        expectError(await api.export({ exportType: 'invoices', ...RANGE }, api.tokenFor(api.users.nurse)), 403, 'FORBIDDEN', { label: 'clinical staff' });
+        for (const alias of ['boss', 'mod']) {
           const ok = await api.export({ exportType: 'invoices', ...RANGE }, api.tokenFor(api.users[alias]));
           if (ok.status !== 200) throw new Error(`${alias} token -> ${ok.status}: ${ok.text}`);
           if (!(ok.headers['content-type'] ?? '').startsWith('text/csv')) throw new Error(`${alias}: content-type ${ok.headers['content-type']}`);
@@ -302,7 +304,7 @@ export default [
   {
     name: 'W43/W44: quote doubling, formula neutralisation, unquoted Y/N and numerics, per-line tax and total',
     async fn({ root, testUrl }) {
-      await withApi({ root, testUrl, seed: { nurse: 'user' }, fixture: invoiceFixture }, async (api) => {
+      await withApi({ root, testUrl, seed: { nurse: 'moderator' }, fixture: invoiceFixture }, async (api) => {
         const r = await api.export({ exportType: 'invoices', ...RANGE }, api.tokenFor(api.users.nurse));
         if (r.status !== 200) throw new Error(`staff token -> ${r.status}: ${r.text}`);
         const rows = body(r);
@@ -362,7 +364,7 @@ export default [
         {
           root,
           testUrl,
-          seed: { nurse: 'user' },
+          seed: { nurse: 'moderator' },
           fixture: async (db) => {
             const patient = await insertPatient(db);
             const appointment = await insertAppointment(db, patient);

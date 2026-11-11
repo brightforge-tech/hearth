@@ -39,6 +39,7 @@ const buildInvoiceHtml = (input) => rebrand(legacyInvoiceHtml(input));
 const invoiceEmailSubject = (input) => rebrand(legacyInvoiceSubject(input));
 import { createScratch, dropScratch, connectDb, loadFixtures, seedFixtures } from '../helpers/db.mjs';
 import { startTestApp, makeTokens, CONTRACT_SENDERS } from '../helpers/http.mjs';
+import { ensureTestSessions } from '../helpers/session.mjs';
 
 const SCRATCH = '_c14inv';
 const JWT_SECRET = 'c14-contract-invoice-email-secret-0123';
@@ -59,6 +60,7 @@ async function withContractApp({ root, testUrl }, fn) {
       `insert into public.user_roles (user_id, role)
        values ('00000000-0000-4000-e000-000000000002', 'admin')`
     );
+    await ensureTestSessions(db);
     const tokens = makeTokens(JWT_SECRET, [{ key: 'admin', id: '00000000-0000-4000-e000-000000000002', email: 'admin@c14.test' }]);
     try {
       return await fn({ app, db, fixtures, admin: tokens.admin });

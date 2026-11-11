@@ -55,8 +55,11 @@ export function sendJson(res, status, value) {
 export function errorBody(err) {
   const status = err instanceof ApiError ? err.status : 500;
   const code = err.code ?? codeForStatus(status);
-  const message = status >= 500 ? 'Internal server error' : err.message;
-  return { error: { code, message } };
+  // An ApiError's own message is written for the caller (e.g. 503 EMAIL_DISABLED);
+  // anything else that reaches here is an internal fault and is not echoed.
+  const message = err instanceof ApiError && status !== 500 ? err.message : status >= 500 ? 'Internal server error' : err.message;
+  const extra = status < 500 && Number.isFinite(err?.retryAfter) ? { retry_after: err.retryAfter } : {};
+  return { error: { code, message, ...extra } };
 }
 
 // jsonBodyParser({limit}): parse an application/json request body into req.body
@@ -172,9 +175,12 @@ export function errorHandler({ log = console.error } = {}) {
     if (res.headersSent) return next(err);
     const status = err instanceof ApiError ? err.status : httpStatusOf(err);
     const code = err.code ?? codeForStatus(status);
-    const message = status >= 500 ? 'Internal server error' : err.message;
+    // An ApiError's own message is written for the caller (e.g. 503
+    // EMAIL_DISABLED); any other fault is not echoed.
+    const message = err instanceof ApiError && status !== 500 ? err.message : status >= 500 ? 'Internal server error' : err.message;
     if (status >= 500) log(`${req.method} ${req.originalUrl} -> ${status}: ${err.stack ?? err}`);
-    sendJson(res, status, { error: { code, message } });
+    const extra = status < 500 && Number.isFinite(err?.retryAfter) ? { retry_after: err.retryAfter } : {};
+    sendJson(res, status, { error: { code, message, ...extra } });
   };
 }
 

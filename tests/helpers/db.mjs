@@ -16,6 +16,7 @@
 import { readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import pg from 'pg';
+import { ensureTestSessions } from './session.mjs';
 
 // Table names this seeder will insert into. Anything else is a bug in the
 // fixture, not something to pass through to SQL.
@@ -169,6 +170,7 @@ export async function seedUsers(db, users) {
       );
     }
   }
+  await ensureTestSessions(db);
 }
 
 // rowsOf(db, sql, params): plain rows, for the assertions.

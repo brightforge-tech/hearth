@@ -26,7 +26,7 @@ import { join } from 'node:path';
 
 import pg from 'pg';
 
-import { signToken } from '../../api/lib/tokens.mjs';
+import { signTestToken as signToken, ensureTestSessions } from '../helpers/session.mjs';
 import { request, startServer } from '../helpers/server.mjs';
 
 const SCRATCH = '_cq';
@@ -147,6 +147,7 @@ async function withApi({ root, testUrl }, fn) {
     await handle.waitForPort();
     await db.connect();
     for (let i = 0; i < FIXTURE.length; i += 2) await db.query(FIXTURE[i], FIXTURE[i + 1]);
+    await ensureTestSessions(db);
 
     const tokenFor = (which) =>
       signToken({ sub: ID[which], email: `${which}@cq.test` }, { secret: JWT_SECRET });
@@ -201,9 +202,9 @@ const BILLING_PAYMENTS =
   'appointment:appointments( patient:patients(first_name, last_name, email, phone, address) ) )';
 
 const QUEUE_APPOINTMENTS =
-  'id, scheduled_start, created_at, reason, patient_id, status, patient:patients(first_name,last_name)';
+  'id, scheduled_start, created_at, reason, intake_notes, patient_id, status, patient:patients(first_name,last_name)';
 
-const VISIT_APPOINTMENT = 'id, status, scheduled_start, patient:patients(first_name,last_name)';
+const VISIT_APPOINTMENT = 'id, status, scheduled_start, reason, intake_notes, patient:patients(first_name,last_name)';
 const VISIT_SERVICES = 'id, code, name, price, taxable, active';
 
 const TODAYS_SCHEDULE =

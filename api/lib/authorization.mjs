@@ -48,6 +48,7 @@
 export const TABLES = Object.freeze([
   'clinic_settings', 'patients', 'appointments', 'visit_notes', 'services',
   'invoices', 'invoice_items', 'payments', 'user_roles',
+  'expenses', 'booking_requests',
 ]);
 export const VERBS = Object.freeze(['select', 'insert', 'update', 'delete']);
 
@@ -121,6 +122,8 @@ function landingOnly() {
 
 const ANY = Object.freeze({ role: 'any' });
 const ADMIN = Object.freeze({ role: 'admin' });
+// admin + moderator (billing / front office): the finance tables.
+const FINANCE = Object.freeze({ role: 'roles', roles: Object.freeze(['admin', 'moderator']) });
 
 // staffScope(using, check?): the two fragments of a staff-narrowed policy.
 const staffScope = (using, check = null) => Object.freeze({ using: [using], check: check ? [check] : [using] });
@@ -186,15 +189,35 @@ export const POLICIES = Object.freeze({
     update: ADMIN,
     delete: ADMIN,
   }),
+  expenses: Object.freeze({
+    // The hosted policy allowed any session; Hearth narrows expenses to the
+    // finance roles (the same roles the navigation shows the page to), and
+    // keeps deletion for admins, like payments.
+    select: FINANCE,
+    insert: FINANCE,
+    update: FINANCE,
+    delete: ADMIN,
+  }),
+  booking_requests: Object.freeze({
+    // Staff read them through /api/query (the review page and its realtime
+    // feed); every write goes through api/routes/booking-requests.mjs (public
+    // submit, approve, decline), never through the generic route.
+    select: ANY,
+    insert: null,
+    update: null,
+    delete: null,
+  }),
 });
 
 // --- the anonymous allow-list ------------------------------------------------
-// Exactly the two shapes the hosted policies serve to `anon`. Widening this is a
+// The only shape served to `anon`: the landing-page services. (The hosted app
+// also let anyone insert a patient from the booking form; Hearth does not —
+// public booking requests go to booking_requests through a dedicated,
+// rate-limited endpoint and never create a patient.) Widening this is a
 // security change, not a convenience: each entry is data the public landing page
 // is allowed to read or write today, and nothing more.
 const ANON_ALLOW = Object.freeze({
   'services.select': landingOnly(),
-  'patients.insert': null,
 });
 
 export function anonAllow(table, verb = 'select') {
@@ -227,6 +250,7 @@ export function can(user, table, verb) {
   if (!policy) return false;
   if (!user || !user.id) return false;
   if (policy.role === 'admin') return isAdmin(user);
+  if (policy.role === 'roles') return Array.isArray(user.roles) && user.roles.some((r) => policy.roles.includes(r));
   return true; // 'any' and 'self' both just need a session (roles already checked)
 }
 
@@ -254,7 +278,7 @@ export function predicate(user, table, verb, { alias = table, when = 'using' } =
     // "Read own roles": user_id = auth.uid(), bound as a parameter.
     return { sql: `${ref(alias, 'user_id')} = $1`, params: [user?.id ?? null] };
   }
-  if (policy.role === 'admin') return null; // every row, for the admin that passed can()
+  if (policy.role === 'admin' || policy.role === 'roles') return null; // every row, for a caller that passed can()
   if (isAdmin(user)) return null; // staff scoping does not apply to an admin
   if (policy.staff) {
     const list = when === 'check' ? policy.staff.check : policy.staff.using;
@@ -320,6 +344,7 @@ export function denyReason(user, table, verb) {
   const policy = policyFor(table, verb);
   if (!policy) return `this API does not allow ${verb === undefined ? 'that' : verb} on ${String(table)}`;
   if (policy.role === 'admin') return `${table} ${verb} needs the admin role`;
+  if (policy.role === 'roles') return `${table} ${verb} needs one of the roles ${policy.roles.join(', ')}`;
   if (policy.role === 'self') return `${table} ${verb} is limited to your own rows`;
   return `${table} ${verb} is not permitted for this account`;
 }

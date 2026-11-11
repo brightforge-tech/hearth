@@ -33,7 +33,7 @@ import { join, resolve } from 'node:path';
 import pg from 'pg';
 
 import { normalizeObjectName, resolveObject } from '../../api/lib/uploads.mjs';
-import { signToken } from '../../api/lib/tokens.mjs';
+import { signTestToken as signToken, ensureTestSessions } from '../helpers/session.mjs';
 import { request, startServer } from '../helpers/server.mjs';
 
 const SCRATCH = '_t9s';
@@ -115,6 +115,7 @@ async function withApi({ root, testUrl }, fn) {
     await handle.waitForPort();
     await db.connect();
     for (let i = 0; i < FIXTURE.length; i += 2) await db.query(FIXTURE[i], FIXTURE[i + 1]);
+    await ensureTestSessions(db);
 
     const tokenFor = (which) =>
       signToken({ sub: ID[which], email: `${which}@t9s.test` }, { secret: JWT_SECRET });

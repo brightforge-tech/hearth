@@ -54,7 +54,7 @@
 import express from 'express';
 
 import { query } from '../db.mjs';
-import { streamPredicate } from '../lib/authorization.mjs';
+import { can, streamPredicate } from '../lib/authorization.mjs';
 import { getCatalog, getTable, quoteIdent } from '../lib/catalog.mjs';
 import { FilterError, combineAnd, compileFilters, rebase } from '../lib/filters.mjs';
 import { ApiError, asyncHandler } from '../lib/http.mjs';
@@ -73,6 +73,8 @@ export const TABLE_ALLOW = Object.freeze([
   'patients',
   'visit_notes',
   'user_roles',
+  'expenses',
+  'booking_requests',
 ]);
 
 // One page's worth of events per poll: a burst (a bulk insert) drains over
@@ -198,6 +200,9 @@ function buildStatement(user, catalog, tables, filters, cursor, limit) {
   const branches = [];
 
   for (const table of tables) {
+    // A table the caller may not read at all (expenses for clinical staff)
+    // never reaches the stream for them.
+    if (!can(user, table, 'select')) continue;
     params.push(table);
     let sql = `("o"."table_name" = $${params.length})`;
 
@@ -222,7 +227,7 @@ function buildStatement(user, catalog, tables, filters, cursor, limit) {
                   "o"."created_at"
              from public.${quoteIdent('hh_outbox')} as "o"
             where "o"."id" > $1
-              and (${branches.join(' or ')})
+              and (${branches.length ? branches.join(' or ') : 'false'})
             order by "o"."id"
             limit $${params.length}`,
     params,

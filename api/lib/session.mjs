@@ -32,6 +32,7 @@
 import { query } from '../db.mjs';
 import { ApiError } from './http.mjs';
 import { verifyToken } from './tokens.mjs';
+import { checkSession } from './sessions.mjs';
 
 // The cookie that mirrors the bearer token (task t5's form login sets it;
 // SameSite=Lax so a cross-site request cannot ride on it).
@@ -60,6 +61,8 @@ async function loadUser(id) {
   const { rows } = await query(
     `select u.id,
             u.email,
+            u.must_change_password,
+            coalesce(bool_or(r.is_doctor), false) as is_doctor,
             coalesce(
               array_agg(r.role::text order by r.role) filter (where r.role is not null),
               '{}'::text[]
@@ -67,7 +70,7 @@ async function loadUser(id) {
        from public.app_users u
        left join public.user_roles r on r.user_id = u.id
       where u.id = $1
-      group by u.id, u.email`,
+      group by u.id, u.email, u.must_change_password`,
     [id]
   );
   return rows[0] ?? null;
@@ -76,7 +79,7 @@ async function loadUser(id) {
 // resolveUser(req): the caller's {id, email, roles}, or throws ApiError(401/403).
 // Every branch is a decision, not a fallback: this is the only place in the API
 // that decides whether a session is real.
-export async function resolveUser(req) {
+export async function resolveUser(req, { allowPendingPasswordChange = false } = {}) {
   const token = readSessionToken(req);
   if (!token) {
     throw new ApiError(401, 'A session is required: send Authorization: Bearer <token>', 'UNAUTHORIZED');
@@ -104,11 +107,43 @@ export async function resolveUser(req) {
   if (!row) {
     throw new ApiError(401, 'The session belongs to an account that no longer exists', 'UNAUTHORIZED');
   }
+  // The server-side session: idle timeout, absolute lifetime, revocation.
+  const state = await checkSession(payload.sid, id);
+  if (state === 'expired') {
+    throw new ApiError(401, 'Your session has expired. Please sign in again.', 'SESSION_EXPIRED');
+  }
+  if (state !== 'ok') {
+    throw new ApiError(401, 'The session is not valid or has expired', 'UNAUTHORIZED');
+  }
   const roles = Array.isArray(row.roles) ? row.roles : [];
   if (roles.length === 0) {
     throw new ApiError(403, 'This account has no role assigned, so it cannot access any data', 'NO_ROLE');
   }
-  return { id: row.id, email: row.email, roles };
+  const user = {
+    id: row.id,
+    email: row.email,
+    roles,
+    is_doctor: Boolean(row.is_doctor),
+    must_change_password: Boolean(row.must_change_password),
+    sid: payload.sid,
+  };
+  if (user.must_change_password && !allowPendingPasswordChange) {
+    throw new ApiError(403, 'You must change your password before continuing', 'PASSWORD_CHANGE_REQUIRED');
+  }
+  return user;
+}
+
+// requireAuthAllowPending: requireAuth for the few routes a user with a
+// pending forced password change may still call (session, change-password,
+// logout).
+export function requireAuthAllowPending(req, res, next) {
+  resolveUser(req, { allowPendingPasswordChange: true }).then(
+    (user) => {
+      req.user = user;
+      next();
+    },
+    (err) => next(err instanceof ApiError ? err : Object.assign(new ApiError(401, 'The session is not valid or has expired', 'UNAUTHORIZED'), { cause: err }))
+  );
 }
 
 // requireAuth: the gate every authenticated route mounts first (the RPC route,
@@ -133,8 +168,12 @@ export function requireOptionalAuth(req, res, next) {
       req.user = user;
       next();
     },
-    () => {
+    (err) => {
+      // Treated as "no caller" — the anonymous allow-list may still answer —
+      // but a route that needs a caller re-throws this so the browser hears
+      // SESSION_EXPIRED / PASSWORD_CHANGE_REQUIRED rather than a bare 401.
       req.user = null;
+      req.authError = err instanceof ApiError && ['SESSION_EXPIRED', 'PASSWORD_CHANGE_REQUIRED'].includes(err.code) ? err : null;
       next();
     }
   );

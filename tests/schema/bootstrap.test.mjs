@@ -186,7 +186,7 @@ export default [
     },
   },
   {
-    name: 'db:migrate applies every migration in filename order, records them, and reports all seven applied',
+    name: 'db:migrate applies every migration in filename order, records them, and reports them all applied',
     async fn({ root, testUrl }) {
       const dbName = `${decodeURIComponent(new URL(testUrl).pathname.replace(/^\//, ''))}_t3`;
       const dsn = swapDb(testUrl, dbName);
@@ -195,8 +195,8 @@ export default [
       const out = mustSucceed(r, 'db:migrate (first run)');
       const n = (out.match(/db:migrate: applied \S+\.sql/g) ?? []).length;
       const expected = listMigrations(join(root, 'db', 'migrations'));
-      if (expected.length !== 7)
-        throw new Error(`milestone 1 expects exactly 7 migrations, found ${expected.join(', ')}`);
+      if (expected.length < 9)
+        throw new Error(`expected at least 9 migrations, found ${expected.join(', ')}`);
       if (n !== expected.length || !new RegExp(`applied ${expected.length} new migration`).test(out))
         throw new Error(`expected ${expected.length} applied, summary was:\n${out}`);
 
