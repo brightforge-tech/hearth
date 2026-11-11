@@ -1,0 +1,60 @@
+# Hearth + PostgreSQL. Quick start:
+#
+#   cp .env.example .env        # set POSTGRES_PASSWORD, JWT_SECRET and the SEED_* accounts
+#   docker compose up -d --build
+#   open http://localhost:8787
+#
+# On start the app applies database migrations and creates the SEED_* accounts
+# if they are missing. Secrets come only from .env — never write them here.
+# The database is not published to the host, and the app only on 127.0.0.1:
+# put an HTTPS reverse proxy in front of it (docs/DEPLOYMENT.md).
+services:
+  app:
+    build:
+      context: .
+      args:
+        # Landing-page details are compiled into the web app at build time.
+        VITE_CLINIC_NAME: ${VITE_CLINIC_NAME:-}
+        VITE_CLINIC_SHORT_NAME: ${VITE_CLINIC_SHORT_NAME:-}
+        VITE_CLINIC_PHONE: ${VITE_CLINIC_PHONE:-}
+        VITE_CLINIC_EMAIL: ${VITE_CLINIC_EMAIL:-}
+        VITE_CLINIC_ADDRESS: ${VITE_CLINIC_ADDRESS:-}
+        VITE_CLINIC_HOURS: ${VITE_CLINIC_HOURS:-}
+    image: brightforge/hearth:local
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    env_file: .env
+    environment:
+      # These override anything in .env: inside Compose the database is the
+      # `db` service and the app must listen on all container interfaces.
+      DATABASE_URL: postgresql://hearth:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@db:5432/hearth
+      HOST: 0.0.0.0
+      PORT: "8787"
+      UPLOAD_DIR: /data/uploads
+    ports:
+      # Local machine only. Serve your network through an HTTPS reverse proxy.
+      - "127.0.0.1:8787:8787"
+    volumes:
+      - hearth-data:/data
+
+  db:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: hearth
+      POSTGRES_USER: hearth
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U hearth -d hearth"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+    # No `ports:` — only the app can reach the database, over the compose network.
+    volumes:
+      - hearth-db:/var/lib/postgresql/data
+
+volumes:
+  hearth-db:
+  hearth-data:

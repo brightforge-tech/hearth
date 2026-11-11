@@ -1,0 +1,127 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: Lint, typecheck and build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run typecheck
+      - run: npm run build
+
+  test:
+    name: Tests (Node 22, PostgreSQL 17)
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd="pg_isready -U postgres"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=20
+
+    env:
+      # The runner resets hearth_test (DATABASE_URL + "_test"), never hearth.
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/hearth
+      JWT_SECRET: ci-only-not-a-secret-0123456789abcdef0123456789abcdef
+      JUNIT_OUTPUT: reports/junit.xml
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+      - run: npm test
+
+      - name: Upload test report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: junit
+          path: reports/junit.xml
+          if-no-files-found: warn
+
+  docker:
+    name: Docker image smoke test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build image
+        run: docker build -t hearth:ci .
+
+      - name: Start PostgreSQL and Hearth
+        run: |
+          docker network create hearth-ci
+          docker run -d --name hearth-db --network hearth-ci \
+            -e POSTGRES_DB=hearth -e POSTGRES_USER=hearth -e POSTGRES_PASSWORD=hearth-ci \
+            postgres:17-alpine
+          for i in $(seq 1 30); do
+            docker exec hearth-db pg_isready -U hearth -d hearth && break
+            sleep 1
+          done
+          docker exec hearth-db pg_isready -U hearth -d hearth
+          docker run -d --name hearth-app --network hearth-ci -p 127.0.0.1:8787:8787 \
+            -e DATABASE_URL=postgresql://hearth:hearth-ci@hearth-db:5432/hearth \
+            -e JWT_SECRET=ci-only-not-a-secret-0123456789abcdef0123456789abcdef \
+            -e ALLOWED_ORIGINS=http://127.0.0.1:8787 \
+            -e SEED_ADMIN_EMAIL=admin@example.test -e SEED_ADMIN_PASSWORD=ci-admin-password-only \
+            -e SEED_STAFF_EMAIL=staff@example.test -e SEED_STAFF_PASSWORD=ci-staff-password-only \
+            hearth:ci
+
+      - name: Wait for /healthz
+        run: |
+          for i in $(seq 1 60); do
+            code=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8787/healthz || true)
+            if [ "$code" = 200 ]; then echo "healthy after ${i}s"; break; fi
+            sleep 1
+          done
+          test "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8787/healthz)" = 200
+          # the built web app is served from the same port
+          curl -sf http://127.0.0.1:8787/ | grep -qi '<div id="root"'
+          # the API is there and refuses anonymous access
+          test "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8787/api/auth/session)" = 401
+          # the container does not run as root
+          test "$(docker exec hearth-app id -u)" != 0
+
+      - name: Container logs
+        if: always()
+        run: |
+          docker logs hearth-app || true
+          docker logs hearth-db 2>&1 | tail -n 50 || true
+
+      - name: Tear down
+        if: always()
+        run: |
+          docker rm -f hearth-app hearth-db || true
+          docker network rm hearth-ci || true

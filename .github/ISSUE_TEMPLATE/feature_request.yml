@@ -1,0 +1,33 @@
+name: Feature request
+description: Suggest something Hearth should do.
+labels: [enhancement]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the idea! Please check the roadmap in the README first.
+        Hearth is administrative software: requests for clinical decision support
+        (diagnosis, treatment, dosing or interaction advice) are out of scope.
+        **Never include real patient data.**
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem would this solve?
+      description: Describe the situation in your clinic, and who runs into it (front desk, clinician, billing, administrator).
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What would you like to happen?
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: How do you handle it today?
+  - type: textarea
+    id: privacy
+    attributes:
+      label: Privacy and security impact
+      description: Does this store new kinds of patient data, send data to an outside service, or change who can see what?

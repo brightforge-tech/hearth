@@ -1,0 +1,43 @@
+Hearth by BrightForge
+Copyright (C) 2026 BrightForge Technologies Limited
+
+This program is free software: you can redistribute it and/or modify it under
+the terms of the GNU Affero General Public License as published by the Free
+Software Foundation, version 3. See the LICENSE file. Commercial licences are
+available from BrightForge Technologies Limited: info@brightforgett.com
+
+Hearth is administrative software. It is not a medical device and provides no
+clinical decision support. It is provided WITHOUT ANY WARRANTY; see sections
+15 and 16 of the LICENSE.
+
+"Hearth by BrightForge" and "BrightForge" are names and marks of BrightForge
+Technologies Limited. The AGPL licence covers the code; it does not grant
+permission to use these names or logos to promote a modified version or a
+hosted service. Please rename forks you distribute.
+
+-------------------------------------------------------------------------------
+Third-party components
+-------------------------------------------------------------------------------
+
+Hearth is built on open-source packages installed from npm and listed in
+package.json and package-lock.json, each under its own licence (MIT, ISC,
+Apache-2.0 or similar). The main ones are:
+
+- React and React DOM (MIT) - Meta Platforms, Inc. and affiliates
+- React Router (MIT) - Remix Software Inc.
+- TanStack Query (MIT) - Tanner Linsley
+- Radix UI primitives (MIT) - WorkOS
+- UI components in src/components/ui/ derived from shadcn/ui (MIT) - shadcn
+- Tailwind CSS and tailwindcss-animate (MIT)
+- Lucide icons, lucide-react (ISC) - Lucide Contributors
+- Recharts (MIT), date-fns (MIT), Zod (MIT), React Hook Form (MIT),
+  Sonner (MIT), cmdk (MIT), Vaul (MIT)
+- Express (MIT) - OpenJS Foundation and contributors
+- node-postgres, pg (MIT) - Brian Carlson
+- Vite and TypeScript (build tools; MIT and Apache-2.0)
+
+The licence text of each package is in its directory under node_modules/ after
+`npm ci`, and is included in the built web app where the package requires it.
+
+The Docker image is built on the official node image, and docker-compose.yml
+uses the official postgres image; each is subject to its own licences.

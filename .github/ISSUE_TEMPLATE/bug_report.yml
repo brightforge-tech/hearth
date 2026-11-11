@@ -1,0 +1,71 @@
+name: Bug report
+description: Something in Hearth isn't working as it should.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting! **Security problems:** please don't file them here — see SECURITY.md.
+        **Never paste real patient data, passwords, `.env` contents, tokens or database dumps** into an issue.
+        Reproduce with the fictional demo data (`node scripts/demo-data.mjs`) or made-up records.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened?
+      description: What did you do, what did you expect, and what happened instead?
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Sign in as Billing/front office
+        2. Open Billing → ...
+        3. ...
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Hearth version or commit
+      placeholder: "0.1.0 or a commit hash"
+    validations:
+      required: true
+  - type: input
+    id: stack
+    attributes:
+      label: Node.js, PostgreSQL and browser versions
+      placeholder: "Node 22.x, PostgreSQL 17, Firefox 140"
+    validations:
+      required: true
+  - type: dropdown
+    id: hosting
+    attributes:
+      label: How do you run Hearth?
+      options:
+        - Docker Compose
+        - Node.js behind a reverse proxy
+        - Development (npm start / npm run dev)
+        - Other
+    validations:
+      required: true
+  - type: checkboxes
+    id: integrations
+    attributes:
+      label: Optional integrations switched on
+      options:
+        - label: E-mail (Resend)
+        - label: Receipt scanning (AI provider)
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs or screenshots
+      description: Server output and the browser console can help. Remove anything private first — screenshots must not show real patients.
+  - type: checkboxes
+    id: no-phi
+    attributes:
+      label: Patient data
+      options:
+        - label: This issue contains no real patient data.
+          required: true
