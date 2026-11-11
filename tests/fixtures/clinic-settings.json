@@ -1,0 +1,18 @@
+{
+  "description": "The canonical clinic_settings singleton every contract fixture assumes, at the values db/migrations/0004_seed.sql inserts. The tax-free / hostile / payments / orphan fixtures pair with it; invoices-taxed.json and receipt.json document a tax-ON clinic in their own clinic_settings block.",
+  "usage": "The contract suite (task t14) may insert this row into its scratch database before seeding the other fixtures. Columns not listed take their schema defaults (working_hours, created_at, updated_at). It does not steer invoice tax behaviour: the fixtures pass each invoice's tax_enabled/tax_rate explicitly, exactly as the app's own insert does, so a combined scratch DB can keep the 0004 row untouched.",
+  "seed_order": ["clinic_settings"],
+  "clinic_settings": {
+    "id": "11111111-0000-4000-8000-000000000001",
+    "singleton": true,
+    "currency_code": "USD",
+    "tax_enabled": false,
+    "tax_name": "VAT",
+    "tax_rate": 0.00,
+    "default_appointment_duration_minutes": 30
+  },
+  "notes": {
+    "currency": "Every fixture uses currency_code USD so the CSV Currency cell and the HTML totals render exactly the shipped 'USD $<n>.00' characters.",
+    "seeding_convention": "Rows are inserted with the columns listed; omitted columns take their schema defaults; enum columns (status, method) receive the label as a string; timestamptz columns receive the ISO strings shown (all instants here are UTC); numeric columns receive JSON numbers."
+  }
+}

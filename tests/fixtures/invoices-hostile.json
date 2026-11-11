@@ -1,0 +1,79 @@
+{
+  "description": "The W55 hostile fixture: one issued, tax-disabled invoice whose patient and item carry every character class the legacy hand-built CSV template could not survive — a quote and a comma in the name (O\"Neil, Bob, the S6 layout breaker), a leading + in the e-mail and = in the description (formula-injection vectors), <script> / <img onerror> payloads in phone and address, and a =SUM(...) payload in the appointment reason (XSS vectors for the e-mail). The invoice's single 5.00 item is taxable while the invoice's tax is OFF.",
+  "usage": "Seed block first (patients, appointments, invoices, invoice_items), then POST /api/quickbooks-export with request. Its window (7 Aug 2025, created_at) contains no other fixture's issued invoice. The invoice-email endpoint is driven with requests[0] and legacy_inputs.invoice_emails[0] as the unescaped byte reference (the W56 escaping case).",
+  "seed_order": ["patients", "appointments", "invoices", "invoice_items"],
+  "clinic_settings": {
+    "id": "11111111-0000-4000-8000-000000000001",
+    "singleton": true,
+    "currency_code": "USD",
+    "tax_enabled": false,
+    "tax_name": "VAT",
+    "tax_rate": 0.00,
+    "default_appointment_duration_minutes": 30
+  },
+  "request": { "exportType": "invoices", "startDate": "2025-08-07T00:00:00", "endDate": "2025-08-07T23:59:59" },
+  "requests": [
+    { "invoiceId": "d0000000-0000-4000-8000-000000000004", "recipientEmail": "bob.oneil@example.com" }
+  ],
+  "seed": {
+    "patients": [
+      { "id": "a0000000-0000-4000-8000-000000000004", "first_name": "O\"Neil,", "last_name": "Bob", "phone": "<script>alert(1)</script>", "email": "+15550100@example.com", "address": "<img src=x onerror=alert(1)>", "created_at": "2025-07-25T08:00:00Z", "updated_at": "2025-07-25T08:00:00Z" }
+    ],
+    "appointments": [
+      { "id": "b0000000-0000-4000-8000-000000000004", "patient_id": "a0000000-0000-4000-8000-000000000004", "scheduled_start": "2025-08-07T09:00:00Z", "reason": "=SUM(1,2)*cmd|' /C calc'!A0", "created_at": "2025-08-02T08:00:00Z", "updated_at": "2025-08-02T08:00:00Z" }
+    ],
+    "invoices": [
+      { "id": "d0000000-0000-4000-8000-000000000004", "appointment_id": "b0000000-0000-4000-8000-000000000004", "currency_code": "USD", "tax_enabled": false, "tax_rate": 0.00, "status": "issued", "created_at": "2025-08-07T10:30:00Z" }
+    ],
+    "invoice_items": [
+      { "id": "e0000000-0000-4000-8000-000000000005", "invoice_id": "d0000000-0000-4000-8000-000000000004", "service_id": null, "description": "=cmd|' /C calc'!A0", "quantity": 1, "unit_price": 5.00, "taxable": true, "created_at": "2025-08-07T10:31:00Z", "updated_at": "2025-08-07T10:31:00Z" }
+    ]
+  },
+  "expected_after_seed": {
+    "d0000000-0000-4000-8000-000000000004": { "subtotal": 5.00, "tax_amount": 0.00, "total": 5.00, "paid_amount": 0.00, "status": "issued" }
+  },
+  "legacy_inputs": {
+    "export_invoices": [
+      {
+        "id": "d0000000-0000-4000-8000-000000000004",
+        "created_at": "2025-08-07T10:30:00Z",
+        "total": 5,
+        "tax_amount": 0,
+        "subtotal": 5,
+        "currency_code": "USD",
+        "status": "issued",
+        "appointment": { "patient": { "first_name": "O\"Neil,", "last_name": "Bob", "email": "+15550100@example.com" } },
+        "invoice_items": [
+          { "description": "=cmd|' /C calc'!A0", "quantity": 1, "unit_price": 5, "line_total": 5, "taxable": true }
+        ]
+      }
+    ],
+    "invoice_emails": [
+      {
+        "id": "d0000000-0000-4000-8000-000000000004",
+        "total": 5,
+        "paid_amount": 0,
+        "currency_code": "USD",
+        "created_at": "2025-08-07T10:30:00Z",
+        "status": "issued",
+        "subtotal": 5,
+        "tax_amount": 0,
+        "tax_enabled": false,
+        "tax_rate": 0,
+        "appointment": {
+          "scheduled_start": "2025-08-07T09:00:00Z",
+          "reason": "=SUM(1,2)*cmd|' /C calc'!A0",
+          "patient": { "first_name": "O\"Neil,", "last_name": "Bob", "email": "+15550100@example.com", "phone": "<script>alert(1)</script>", "address": "<img src=x onerror=alert(1)>" }
+        },
+        "invoice_items": [
+          { "description": "=cmd|' /C calc'!A0", "quantity": 1, "unit_price": 5, "line_total": 5, "service": null }
+        ]
+      }
+    ]
+  },
+  "contract": {
+    "invoices_csv": "expected old-vs-new diff (W55, the S6 escaping only — the numerics and dates agree): buildInvoicesCsv(legacy_inputs.export_invoices, request) writes the row \"8/7/2025\",\"O\"Neil, Bob\",\"+15550100@example.com\",\"INV-00000004\",\"=cmd|' /C calc'!A0\",1,5,5,Y,0,5,\"USD\" — the unescaped quote and comma in the name split the Customer cell across two columns (13 fields instead of 12) and the = cells open as spreadsheet formulas. The endpoint writes the fixed 12-cell row \"8/7/2025\",\"O\"\"Neil, Bob\",\"'+15550100@example.com\",\"INV-00000004\",\"'=cmd|' /C calc'!A0\",1,5,5,Y,0,5,\"USD\": the name quote doubled, the + and = cells single-quoted. Date 8/7/2025, INV-00000004, the numerics 1, 5, 5, the unquoted Y/0/5 and the quoted \"USD\" are byte-identical on both sides (tax OFF, so the legacy's repeated invoice-level 0/5 equals the endpoint's per-line 0/5 here).",
+    "invoice_email": "expected old-vs-new diff (W56, the S10 escaping only — five replacements, & < > \" '): buildInvoiceHtml(legacy_inputs.invoice_emails[0]) interpolates the phone <script>alert(1)</script>, the address <img src=x onerror=alert(1)>, the reason =SUM(1,2)*cmd|' /C calc'!A0 and the name O\"Neil, raw into the HTML; the ported email-invoice builder emits the same text with & < > \" and ' escaped (so the name cell reads O&quot;Neil, Bob and the reason carries &#39; where the legacy wrote '). The subject, the Email cell (+15550100@example.com has no escapable character), the totals block 5.00 / 0 Outstanding, every CSS byte and every other interpolation are byte-identical.",
+    "seeding": "line_total, subtotal, tax_amount and total follow from the schema triggers (tax_enabled false forces tax_amount 0 even though the line is taxable); the seed block omits those columns."
+  }
+}

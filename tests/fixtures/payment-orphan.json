@@ -1,0 +1,42 @@
+{
+  "description": "The W46 payment-orphan fixture: a payment whose invoice has appointment_id NULL. Here the two implementations AGREE: the shipped receipt function read through PostgREST embeds marked invoices!inner / appointments!inner / patients!inner, so the missing appointment link drops the whole row, .single() errors, and the shipped catch answered the same 500 {\"success\":false,\"error\":\"Payment not found\"} body the ported endpoint produces from its INNER JOINs. Unlike the invoice orphan (invoice-orphan.json), no letter with an undefined-addressee was ever built by the shipped code — there is no legacy HTML byte reference for this case, and the contract pins the identical failure answer instead.",
+  "usage": "Seed block first (patients, appointments, invoices, invoice_items, payments), then POST /api/send-receipt-email with requests[0]. The payment's received_at (9 Aug 2025 12:00 UTC) is outside the payments-CSV window (11-13 Aug) and the invoice's created_at (9 Aug) is outside every invoices-CSV window, so this fixture cannot disturb any CSV comparison on a combined scratch database. The endpoint's answer is asserted against the body quoted in the contract; no legacy_inputs are needed.",
+  "requests": [
+    { "paymentId": "f0000000-0000-4000-8000-000000000003", "recipientEmail": "frontdesk@example.com" }
+  ],
+  "seed_order": ["patients", "appointments", "invoices", "invoice_items", "payments"],
+  "clinic_settings": {
+    "id": "11111111-0000-4000-8000-000000000001",
+    "singleton": true,
+    "currency_code": "USD",
+    "tax_enabled": false,
+    "tax_name": "VAT",
+    "tax_rate": 0.00,
+    "default_appointment_duration_minutes": 30
+  },
+  "seed": {
+    "patients": [
+      { "id": "a0000000-0000-4000-8000-000000000011", "first_name": "Munira", "last_name": "Fictional", "phone": "+15555550168", "email": "munira.fictional@example.com", "address": "40 Debe Road", "created_at": "2025-08-03T08:00:00Z", "updated_at": "2025-08-03T08:00:00Z" }
+    ],
+    "appointments": [
+      { "id": "b0000000-0000-4000-8000-000000000011", "patient_id": "a0000000-0000-4000-8000-000000000011", "scheduled_start": "2025-08-09T09:30:00Z", "reason": "Unlinked review", "created_at": "2025-08-06T08:00:00Z", "updated_at": "2025-08-06T08:00:00Z" }
+    ],
+    "invoices": [
+      { "id": "d0000000-0000-4000-8000-000000000010", "appointment_id": null, "currency_code": "USD", "tax_enabled": false, "tax_rate": 0.00, "status": "issued", "created_at": "2025-08-09T11:00:00Z" }
+    ],
+    "invoice_items": [
+      { "id": "e0000000-0000-4000-8000-000000000018", "invoice_id": "d0000000-0000-4000-8000-000000000010", "service_id": null, "description": "X-ray review", "quantity": 1, "unit_price": 35.00, "taxable": false, "created_at": "2025-08-09T11:01:00Z", "updated_at": "2025-08-09T11:01:00Z" }
+    ],
+    "payments": [
+      { "id": "f0000000-0000-4000-8000-000000000003", "invoice_id": "d0000000-0000-4000-8000-000000000010", "amount": 35.00, "method": "cash", "reference": null, "received_at": "2025-08-09T12:00:00Z", "created_at": "2025-08-09T12:00:00Z", "updated_at": "2025-08-09T12:00:00Z" }
+    ]
+  },
+  "expected_after_seed": {
+    "d0000000-0000-4000-8000-000000000010": { "subtotal": 35.00, "tax_amount": 0.00, "total": 35.00, "paid_amount": 35.00, "status": "paid" }
+  },
+  "legacy_inputs": {},
+  "contract": {
+    "receipt_email": "old and new agree (W46, the non-deviating orphan): the shipped select was payments(*) + invoices!inner(*, appointments!inner(patient_id, patients!inner(...))) .single() — the appointment_id NULL makes the inner embed chain yield no row, paymentError is set, and the shipped code threw 'Payment not found' BEFORE building any HTML (buildReceiptHtml is unreachable on this path, which is why this fixture defines no legacy_inputs). The endpoint's fetchPaymentDetail reproduces the !inner chain as INNER JOINs, returns null, and answers 500 with exactly {\"success\":false,\"error\":\"Payment not found\"}; no provider is contacted.",
+    "seeding": "the payment settles the invoice, so recalc_invoice_payments flips d...0010 to paid with paid_amount 35.00 — but neither status matters: the receipt path fails on the missing appointment link regardless."
+  }
+}

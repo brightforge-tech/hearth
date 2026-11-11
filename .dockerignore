@@ -1,0 +1,9 @@
+.git
+node_modules
+dist
+var
+reports
+.env
+.env.*
+!.env.example
+docs/screenshots

@@ -1,0 +1,3 @@
+# Hearth is a staff application holding patient data; nothing here should be indexed.
+User-agent: *
+Disallow: /

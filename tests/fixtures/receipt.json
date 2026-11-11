@@ -1,0 +1,73 @@
+{
+  "description": "The W57 receipt-e-mail fixture: one cash payment of the full 20.00 invoice total, received 8 Aug 2025 14:30 UTC, driving the receipt endpoint end to end. Every receipt-HTML cell class is exercised with plain, escapable-character-free values — Receipt number R00000002 (uppercased last eight of the payment id), Date 8/8/2025 and Time 2:30:00 PM (the two locale-pinned interpolations), Invoice #00000008, patient Name/Email/Phone rows, payment method chip, Reference row, and both currency cells rendered as USD $20.00 through toFixed(2).",
+  "usage": "Seed block first (patients, appointments, invoices, invoice_items, payments), then POST /api/send-receipt-email with requests[0]. The payment received_at (8 Aug 14:30 UTC) sits outside every invoices/payments export window, so this fixture can never contaminate a CSV comparison on a combined scratch database. No export request: this fixture drives the receipt e-mail only; legacy_inputs.receipts[0] is the byte reference for buildReceiptHtml / receiptEmailSubject.",
+  "requests": [
+    { "paymentId": "f0000000-0000-4000-8000-000000000002", "recipientEmail": "zara.specimen@example.com" }
+  ],
+  "seed_order": ["patients", "appointments", "invoices", "invoice_items", "payments"],
+  "clinic_settings": {
+    "id": "11111111-0000-4000-8000-000000000001",
+    "singleton": true,
+    "currency_code": "USD",
+    "tax_enabled": false,
+    "tax_name": "VAT",
+    "tax_rate": 0.00,
+    "default_appointment_duration_minutes": 30
+  },
+  "seed": {
+    "patients": [
+      { "id": "a0000000-0000-4000-8000-000000000008", "first_name": "Zara", "last_name": "Specimen", "phone": "+15555550156", "email": "zara.specimen@example.com", "address": "5 Marabella Street", "created_at": "2025-08-01T08:00:00Z", "updated_at": "2025-08-01T08:00:00Z" }
+    ],
+    "appointments": [
+      { "id": "b0000000-0000-4000-8000-000000000008", "patient_id": "a0000000-0000-4000-8000-000000000008", "scheduled_start": "2025-08-08T13:30:00Z", "reason": "Follow-up", "created_at": "2025-08-03T08:00:00Z", "updated_at": "2025-08-03T08:00:00Z" }
+    ],
+    "invoices": [
+      { "id": "d0000000-0000-4000-8000-000000000008", "appointment_id": "b0000000-0000-4000-8000-000000000008", "currency_code": "USD", "tax_enabled": false, "tax_rate": 0.00, "status": "issued", "created_at": "2025-08-08T14:00:00Z" }
+    ],
+    "invoice_items": [
+      { "id": "e0000000-0000-4000-8000-000000000013", "invoice_id": "d0000000-0000-4000-8000-000000000008", "service_id": null, "description": "Minor dressing", "quantity": 1, "unit_price": 20.00, "taxable": false, "created_at": "2025-08-08T14:01:00Z", "updated_at": "2025-08-08T14:01:00Z" }
+    ],
+    "payments": [
+      { "id": "f0000000-0000-4000-8000-000000000002", "invoice_id": "d0000000-0000-4000-8000-000000000008", "amount": 20.00, "method": "cash", "reference": "RCP-0808", "received_at": "2025-08-08T14:30:00Z", "created_at": "2025-08-08T14:30:00Z", "updated_at": "2025-08-08T14:30:00Z" }
+    ]
+  },
+  "expected_after_seed": {
+    "d0000000-0000-4000-8000-000000000008": { "subtotal": 20.00, "tax_amount": 0.00, "total": 20.00, "paid_amount": 20.00, "status": "paid" }
+  },
+  "legacy_inputs": {
+    "receipts": [
+      {
+        "id": "f0000000-0000-4000-8000-000000000002",
+        "invoice_id": "d0000000-0000-4000-8000-000000000008",
+        "amount": 20,
+        "method": "cash",
+        "reference": "RCP-0808",
+        "received_at": "2025-08-08T14:30:00Z",
+        "created_at": "2025-08-08T14:30:00Z",
+        "updated_at": "2025-08-08T14:30:00Z",
+        "invoices": {
+          "id": "d0000000-0000-4000-8000-000000000008",
+          "appointment_id": "b0000000-0000-4000-8000-000000000008",
+          "currency_code": "USD",
+          "tax_enabled": false,
+          "tax_rate": 0,
+          "subtotal": 20,
+          "tax_amount": 0,
+          "total": 20,
+          "paid_amount": 20,
+          "status": "paid",
+          "created_at": "2025-08-08T14:00:00Z",
+          "appointments": {
+            "id": "b0000000-0000-4000-8000-000000000008",
+            "patient_id": "a0000000-0000-4000-8000-000000000008",
+            "patients": { "first_name": "Zara", "last_name": "Specimen", "email": "zara.specimen@example.com", "phone": "+15555550156", "address": "5 Marabella Street" }
+          }
+        }
+      }
+    ]
+  },
+  "contract": {
+    "receipt_email": "byte-identical to buildReceiptHtml(legacy_inputs.receipts[0]) and to receiptEmailSubject(legacy_inputs.receipts[0]) (W57): the subject Payment Receipt R00000002; the template's Receipt R00000002 header, Date 8/8/2025, Time 2:30:00 PM (TZ=UTC, the pinned legacyDate/legacyTime of api/lib/format.mjs — the same en-US characters the hosted Deno runtime produced), Invoice #00000008, patient Name Zara Specimen with Email and Phone rows, payment-method chip cash, Reference row RCP-0808, Invoice Total USD $20.00 and Amount Paid USD $20.00. No value carries an escapable character, so the S10 escapeHtml pass is the identity here and the ported email-receipt builder matches the shipped bytes exactly, CSS and whitespace included.",
+    "seeding": "the payment covers the invoice total, so recalc_invoice_payments flips d...0008 to paid and sets paid_amount 20.00 — legacy_inputs mirrors that post-trigger state (status paid, paid_amount 20), matching the PostgREST row the shipped function would have fetched after the payment was recorded. invoices.updated_at is deliberately absent from the embed: a trigger mutates it on every recalc and neither builder reads it."
+  }
+}

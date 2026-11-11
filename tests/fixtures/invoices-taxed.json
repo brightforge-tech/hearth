@@ -1,0 +1,82 @@
+{
+  "description": "The W55 tax fixture: one issued invoice at tax_rate 10 with tax_enabled true, two items — 2 x 10.00 taxable and 1 x 5.00 non-taxable — so recalc_invoice_totals puts subtotal 25.00 / tax_amount 2.00 / total 27.00 on the invoice. Over it the legacy CSV repeats the INVOICE-level 2 and 27 on BOTH rows (the S8 bug, W55), while the endpoint writes per-line 2/22 and 0/5 (W44). All other bytes — header, Date, Customer, Email, id cells, quantities, rates, line totals, the unquoted Y/N and the quoted \"USD\" — must be byte-identical.",
+  "usage": "Seed block first (patients, appointments, invoices, invoice_items), then POST /api/quickbooks-export with request. Its window (5 Aug 2025, created_at) contains no other fixture's issued invoice, so a combined scratch database still answers exactly this one. The invoice-email endpoint is driven with requests[0] and legacy_inputs.invoice_emails[0] as the byte reference (the with-tax totals block, W56).",
+  "seed_order": ["patients", "appointments", "invoices", "invoice_items"],
+  "clinic_settings": {
+    "id": "11111111-0000-4000-8000-000000000001",
+    "singleton": true,
+    "currency_code": "USD",
+    "tax_enabled": false,
+    "tax_name": "VAT",
+    "tax_rate": 0.00,
+    "default_appointment_duration_minutes": 30
+  },
+  "request": { "exportType": "invoices", "startDate": "2025-08-05T00:00:00", "endDate": "2025-08-05T23:59:59" },
+  "requests": [
+    { "invoiceId": "d0000000-0000-4000-8000-000000000003", "recipientEmail": "priya.testcase@example.com" }
+  ],
+  "seed": {
+    "patients": [
+      { "id": "a0000000-0000-4000-8000-000000000003", "first_name": "Priya", "last_name": "Testcase", "phone": "+15555550133", "email": "priya.testcase@example.com", "address": "14 Cocoyea Village", "created_at": "2025-07-22T08:00:00Z", "updated_at": "2025-07-22T08:00:00Z" }
+    ],
+    "appointments": [
+      { "id": "b0000000-0000-4000-8000-000000000003", "patient_id": "a0000000-0000-4000-8000-000000000003", "scheduled_start": "2025-08-05T09:00:00Z", "reason": "Dental review", "created_at": "2025-08-01T08:00:00Z", "updated_at": "2025-08-01T08:00:00Z" }
+    ],
+    "invoices": [
+      { "id": "d0000000-0000-4000-8000-000000000003", "appointment_id": "b0000000-0000-4000-8000-000000000003", "currency_code": "USD", "tax_enabled": true, "tax_rate": 10.00, "status": "issued", "created_at": "2025-08-05T14:30:00Z" }
+    ],
+    "invoice_items": [
+      { "id": "e0000000-0000-4000-8000-000000000003", "invoice_id": "d0000000-0000-4000-8000-000000000003", "service_id": null, "description": "Filling", "quantity": 2, "unit_price": 10.00, "taxable": true, "created_at": "2025-08-05T14:31:00Z", "updated_at": "2025-08-05T14:31:00Z" },
+      { "id": "e0000000-0000-4000-8000-000000000004", "invoice_id": "d0000000-0000-4000-8000-000000000003", "service_id": null, "description": "Consultation", "quantity": 1, "unit_price": 5.00, "taxable": false, "created_at": "2025-08-05T14:32:00Z", "updated_at": "2025-08-05T14:32:00Z" }
+    ]
+  },
+  "expected_after_seed": {
+    "d0000000-0000-4000-8000-000000000003": { "subtotal": 25.00, "tax_amount": 2.00, "total": 27.00, "paid_amount": 0.00, "status": "issued" }
+  },
+  "legacy_inputs": {
+    "export_invoices": [
+      {
+        "id": "d0000000-0000-4000-8000-000000000003",
+        "created_at": "2025-08-05T14:30:00Z",
+        "total": 27,
+        "tax_amount": 2,
+        "subtotal": 25,
+        "currency_code": "USD",
+        "status": "issued",
+        "appointment": { "patient": { "first_name": "Priya", "last_name": "Testcase", "email": "priya.testcase@example.com" } },
+        "invoice_items": [
+          { "description": "Filling", "quantity": 2, "unit_price": 10, "line_total": 20, "taxable": true },
+          { "description": "Consultation", "quantity": 1, "unit_price": 5, "line_total": 5, "taxable": false }
+        ]
+      }
+    ],
+    "invoice_emails": [
+      {
+        "id": "d0000000-0000-4000-8000-000000000003",
+        "total": 27,
+        "paid_amount": 0,
+        "currency_code": "USD",
+        "created_at": "2025-08-05T14:30:00Z",
+        "status": "issued",
+        "subtotal": 25,
+        "tax_amount": 2,
+        "tax_enabled": true,
+        "tax_rate": 10,
+        "appointment": {
+          "scheduled_start": "2025-08-05T09:00:00Z",
+          "reason": "Dental review",
+          "patient": { "first_name": "Priya", "last_name": "Testcase", "email": "priya.testcase@example.com", "phone": "+15555550133", "address": "14 Cocoyea Village" }
+        },
+        "invoice_items": [
+          { "description": "Filling", "quantity": 2, "unit_price": 10, "line_total": 20, "service": null },
+          { "description": "Consultation", "quantity": 1, "unit_price": 5, "line_total": 5, "service": null }
+        ]
+      }
+    ]
+  },
+  "contract": {
+    "invoices_csv": "expected old-vs-new diff (W55): buildInvoicesCsv(legacy_inputs.export_invoices, request) ends its two rows ,Y,2,27 and ,N,2,27 — the shipped row interpolates invoice.tax_amount and invoice.total on EVERY item line, so the 10% invoice tax of 2.00 and the 27.00 invoice total repeat even on the non-taxable line. The endpoint ends ,Y,2,22 and ,N,0,5 instead (S8/W44: line 20.00 taxable at 10 percent carries 2/22; the non-taxable 5.00 line carries 0/5, so the two lines sum to the invoice's 27.00). Every other byte — header, Date 8/5/2025, customer cells, INV-00000003 id cells, 2, 10, 20, unquoted Y, 1, 5, 5, unquoted N, and both quoted \"USD\" cells — is byte-identical.",
+    "invoice_email": "byte-identical to buildInvoiceHtml(legacy_inputs.invoice_emails[0]) and to invoiceEmailSubject(...) (W56, with-tax case): the totals block carries the INVOICE-LEVEL Tax 2.00 and Total 27.00 rows exactly as the shipped template renders them from the invoice columns — the ported email-invoice builder reads the same invoice-level figures, so the S8 per-line change is CSV-only and the HTML matches byte for byte.",
+    "seeding": "line_total, subtotal, tax_amount, total and paid_amount/status follow from the schema triggers (recalc_invoice_totals taxes only the taxable subtotal when the invoice's own tax_enabled is true: 20 x 10% = 2.00); the seed block omits those columns and the values above are what they compute."
+  }
+}

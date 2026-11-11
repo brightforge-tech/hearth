@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Harbourview Medical Centre">
+  <defs>
+    <clipPath id="hv-cross-w">
+      <rect x="22" y="4" width="20" height="56" rx="6"/>
+      <rect x="4" y="22" width="56" height="20" rx="6"/>
+    </clipPath>
+    <mask id="hv-waves">
+      <rect width="64" height="64" fill="#fff"/>
+      <path d="M0 37c6-4 10-4 16 0s10 4 16 0 10-4 16 0 10 4 16 0" fill="none" stroke="#000" stroke-width="3.2" stroke-linecap="round"/>
+      <path d="M0 46c6-4 10-4 16 0s10 4 16 0 10-4 16 0 10 4 16 0" fill="none" stroke="#000" stroke-width="3.2" stroke-linecap="round"/>
+    </mask>
+  </defs>
+  <g clip-path="url(#hv-cross-w)">
+    <rect width="64" height="64" fill="#fff" mask="url(#hv-waves)"/>
+  </g>
+</svg>

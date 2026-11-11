@@ -1,0 +1,80 @@
+{
+  "description": "The W40 payments-CSV fixture: three payments in one received_at window, covering every Payments-CSV cell class — a fully paid tax-enabled invoice (60.50, a numerics cell that renders as the JSON number 60.5), a fully paid tax-free invoice whose cheque-like 'transfer' payment has a NULL reference (the Reference cell becomes the empty quoted cell in BOTH builders), and a partial payment on an invoice with appointment_id NULL (the milestone-pinned blank Customer cell, legacy `\"${customer}\"` of the empty string, endpoint csvCell(''), the same two bytes). Their invoices were created 10 Aug 2025, OUTSIDE the request window, and the payments flip two of them to paid — neither can leak into any invoices-CSV fixture window.",
+  "usage": "Seed block first (patients, appointments, services, invoices, invoice_items, payments), then POST /api/quickbooks-export with request over received_at. The window (11-13 Aug 2025) contains no other fixture's payment. This fixture drives the payments CSV only — no e-mail endpoint.",
+  "seed_order": ["patients", "appointments", "services", "invoices", "invoice_items", "payments"],
+  "clinic_settings": {
+    "id": "11111111-0000-4000-8000-000000000001",
+    "singleton": true,
+    "currency_code": "USD",
+    "tax_enabled": false,
+    "tax_name": "VAT",
+    "tax_rate": 0.00,
+    "default_appointment_duration_minutes": 30
+  },
+  "request": { "exportType": "payments", "startDate": "2025-08-11T00:00:00", "endDate": "2025-08-13T23:59:59" },
+  "seed": {
+    "patients": [
+      { "id": "a0000000-0000-4000-8000-000000000005", "first_name": "Anand", "last_name": "Demo", "phone": "+15555550140", "email": "anand.demo@example.com", "address": "3 San Juan Road", "created_at": "2025-07-28T08:00:00Z", "updated_at": "2025-07-28T08:00:00Z" },
+      { "id": "a0000000-0000-4000-8000-000000000006", "first_name": "Roshni", "last_name": "Mockridge", "phone": "+15555550147", "email": "roshni.mockridge@example.com", "address": "9 Barataria Street", "created_at": "2025-07-28T09:00:00Z", "updated_at": "2025-07-28T09:00:00Z" }
+    ],
+    "appointments": [
+      { "id": "b0000000-0000-4000-8000-000000000005", "patient_id": "a0000000-0000-4000-8000-000000000005", "scheduled_start": "2025-08-10T09:00:00Z", "reason": "Physiotherapy", "created_at": "2025-08-04T08:00:00Z", "updated_at": "2025-08-04T08:00:00Z" },
+      { "id": "b0000000-0000-4000-8000-000000000006", "patient_id": "a0000000-0000-4000-8000-000000000006", "scheduled_start": "2025-08-10T10:00:00Z", "reason": "Vaccination", "created_at": "2025-08-04T09:00:00Z", "updated_at": "2025-08-04T09:00:00Z" }
+    ],
+    "services": [
+      { "id": "c0000000-0000-4000-8000-000000000010", "code": "PHYSIO", "name": "Physiotherapy session", "description": null, "price": 55.00, "taxable": true, "active": true, "created_at": "2025-07-01T00:00:00Z", "updated_at": "2025-07-01T00:00:00Z" }
+    ],
+    "invoices": [
+      { "id": "d0000000-0000-4000-8000-000000000005", "appointment_id": "b0000000-0000-4000-8000-000000000005", "currency_code": "USD", "tax_enabled": true, "tax_rate": 10.00, "status": "issued", "created_at": "2025-08-10T09:10:00Z" },
+      { "id": "d0000000-0000-4000-8000-000000000006", "appointment_id": "b0000000-0000-4000-8000-000000000006", "currency_code": "USD", "tax_enabled": false, "tax_rate": 0.00, "status": "issued", "created_at": "2025-08-10T10:10:00Z" },
+      { "id": "d0000000-0000-4000-8000-000000000007", "appointment_id": null, "currency_code": "USD", "tax_enabled": false, "tax_rate": 0.00, "status": "issued", "created_at": "2025-08-10T11:10:00Z" }
+    ],
+    "invoice_items": [
+      { "id": "e0000000-0000-4000-8000-000000000010", "invoice_id": "d0000000-0000-4000-8000-000000000005", "service_id": "c0000000-0000-4000-8000-000000000010", "description": "Physiotherapy session", "quantity": 1, "unit_price": 55.00, "taxable": true, "created_at": "2025-08-10T09:11:00Z", "updated_at": "2025-08-10T09:11:00Z" },
+      { "id": "e0000000-0000-4000-8000-000000000011", "invoice_id": "d0000000-0000-4000-8000-000000000006", "service_id": "c0000000-0000-4000-8000-000000000010", "description": "Vaccination", "quantity": 1, "unit_price": 40.00, "taxable": false, "created_at": "2025-08-10T10:11:00Z", "updated_at": "2025-08-10T10:11:00Z" },
+      { "id": "e0000000-0000-4000-8000-000000000012", "invoice_id": "d0000000-0000-4000-8000-000000000007", "service_id": null, "description": "Casting", "quantity": 1, "unit_price": 60.00, "taxable": false, "created_at": "2025-08-10T11:11:00Z", "updated_at": "2025-08-10T11:11:00Z" }
+    ],
+    "payments": [
+      { "id": "f0000000-0000-4000-8000-000000000010", "invoice_id": "d0000000-0000-4000-8000-000000000005", "amount": 60.50, "method": "cash", "reference": "CASH-0811", "received_at": "2025-08-11T09:35:00Z", "created_at": "2025-08-11T09:35:00Z", "updated_at": "2025-08-11T09:35:00Z" },
+      { "id": "f0000000-0000-4000-8000-000000000011", "invoice_id": "d0000000-0000-4000-8000-000000000006", "amount": 40.00, "method": "transfer", "reference": null, "received_at": "2025-08-12T10:35:00Z", "created_at": "2025-08-12T10:35:00Z", "updated_at": "2025-08-12T10:35:00Z" },
+      { "id": "f0000000-0000-4000-8000-000000000012", "invoice_id": "d0000000-0000-4000-8000-000000000007", "amount": 30.00, "method": "card", "reference": "CARD-0813", "received_at": "2025-08-13T08:05:00Z", "created_at": "2025-08-13T08:05:00Z", "updated_at": "2025-08-13T08:05:00Z" }
+    ]
+  },
+  "expected_after_seed": {
+    "d0000000-0000-4000-8000-000000000005": { "subtotal": 55.00, "tax_amount": 5.50, "total": 60.50, "paid_amount": 60.50, "status": "paid" },
+    "d0000000-0000-4000-8000-000000000006": { "subtotal": 40.00, "tax_amount": 0.00, "total": 40.00, "paid_amount": 40.00, "status": "paid" },
+    "d0000000-0000-4000-8000-000000000007": { "subtotal": 60.00, "tax_amount": 0.00, "total": 60.00, "paid_amount": 30.00, "status": "issued" }
+  },
+  "legacy_inputs": {
+    "export_payments": [
+      {
+        "id": "f0000000-0000-4000-8000-000000000010",
+        "amount": 60.5,
+        "method": "cash",
+        "received_at": "2025-08-11T09:35:00Z",
+        "reference": "CASH-0811",
+        "invoice": { "id": "d0000000-0000-4000-8000-000000000005", "total": 60.5, "appointment": { "patient": { "first_name": "Anand", "last_name": "Demo" } } }
+      },
+      {
+        "id": "f0000000-0000-4000-8000-000000000011",
+        "amount": 40,
+        "method": "transfer",
+        "received_at": "2025-08-12T10:35:00Z",
+        "reference": null,
+        "invoice": { "id": "d0000000-0000-4000-8000-000000000006", "total": 40, "appointment": { "patient": { "first_name": "Roshni", "last_name": "Mockridge" } } }
+      },
+      {
+        "id": "f0000000-0000-4000-8000-000000000012",
+        "amount": 30,
+        "method": "card",
+        "received_at": "2025-08-13T08:05:00Z",
+        "reference": "CARD-0813",
+        "invoice": { "id": "d0000000-0000-4000-8000-000000000007", "total": 60, "appointment": null }
+      }
+    ]
+  },
+  "contract": {
+    "payments_csv": "byte-identical to buildPaymentsCsv(legacy_inputs.export_payments, request) (W40/W55): header line Date,Customer,Invoice Number,Payment Method,Amount,Reference,Payment ID; rows in received_at order — \"8/11/2025\",\"Anand Demo\",\"INV-00000005\",\"cash\",60.5,\"CASH-0811\",\"PAY-00000010\" (the numerics cell carries the PostgREST JSON number 60.5 for the DB numeric 60.50, and the endpoint's Number() rendering produces the same bytes), \"8/12/2025\",\"Roshni Mockridge\",\"INV-00000006\",\"transfer\",40,\"\",\"PAY-00000011\" (reference NULL lands in the legacy `\"${payment.reference || \"\"}\"` and the endpoint's csvCell('') as the same \"\" cell), and \"8/13/2025\",\"\",\"INV-00000007\",\"card\",30,\"CARD-0813\",\"PAY-00000012\" — the appointment NULL invoice: legacy writes `\"${customer}\"` of the empty join, the endpoint csvCell(''), both \"\" — the milestone-pinned W40 blank-Customer row.",
+    "seeding": "the two full payments flip d...0005 and d...0006 to paid via recalc_invoice_payments (paid >= total > 0) and the partial leaves d...0007 issued; those two paid invoices therefore also cannot appear in any later invoices-CSV window even though their created_at (10 Aug) is outside every invoices window already."
+  }
+}

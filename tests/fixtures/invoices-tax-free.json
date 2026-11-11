@@ -1,0 +1,121 @@
+{
+  "description": "The W54 CSV fixture: two issued invoices, clinic tax disabled, each with exactly one invoice_item, and no name, e-mail or description carrying a character that CSV quoting or formula neutralisation could touch. Over this fixture the /api/quickbooks-export invoices CSV must be BYTE-IDENTICAL to buildInvoicesCsv from tests/legacy/quickbooks-export.legacy.mjs over legacy_inputs.export_invoices.",
+  "usage": "Seed block first (patients, appointments, invoices, invoice_items, payments — FK order), then POST /api/quickbooks-export with request. Its window (1-2 Aug 2025, created_at) contains no other fixture's issued invoice, so a combined scratch database still answers exactly these two. The invoice-email endpoint is driven per requests[i] with legacy_inputs.invoice_emails[i] as the byte reference (W56 no-special-characters case).",
+  "seed_order": ["patients", "appointments", "invoices", "invoice_items", "payments"],
+  "clinic_settings": {
+    "id": "11111111-0000-4000-8000-000000000001",
+    "singleton": true,
+    "currency_code": "USD",
+    "tax_enabled": false,
+    "tax_name": "VAT",
+    "tax_rate": 0.00,
+    "default_appointment_duration_minutes": 30
+  },
+  "request": { "exportType": "invoices", "startDate": "2025-08-01T00:00:00", "endDate": "2025-08-02T23:59:59" },
+  "requests": [
+    { "invoiceId": "d0000000-0000-4000-8000-000000000001", "recipientEmail": "maya.example@example.com" },
+    { "invoiceId": "d0000000-0000-4000-8000-000000000002", "recipientEmail": "carl.sample@example.com" }
+  ],
+  "seed": {
+    "patients": [
+      { "id": "a0000000-0000-4000-8000-000000000001", "first_name": "Maya", "last_name": "Example", "phone": "+15555550122", "email": "maya.example@example.com", "address": "7 St Clair Avenue", "created_at": "2025-07-15T09:00:00Z", "updated_at": "2025-07-15T09:00:00Z" },
+      { "id": "a0000000-0000-4000-8000-000000000002", "first_name": "Carl", "last_name": "Sample", "phone": "+15555550129", "email": "carl.sample@example.com", "address": "22 Laventille Road", "created_at": "2025-07-20T10:30:00Z", "updated_at": "2025-07-20T10:30:00Z" }
+    ],
+    "appointments": [
+      { "id": "b0000000-0000-4000-8000-000000000001", "patient_id": "a0000000-0000-4000-8000-000000000001", "scheduled_start": "2025-08-01T09:30:00Z", "reason": "Routine consultation", "created_at": "2025-07-30T08:00:00Z", "updated_at": "2025-07-30T08:00:00Z" },
+      { "id": "b0000000-0000-4000-8000-000000000002", "patient_id": "a0000000-0000-4000-8000-000000000002", "scheduled_start": "2025-08-02T11:00:00Z", "reason": "Suture removal", "created_at": "2025-07-31T09:00:00Z", "updated_at": "2025-07-31T09:00:00Z" }
+    ],
+    "invoices": [
+      { "id": "d0000000-0000-4000-8000-000000000001", "appointment_id": "b0000000-0000-4000-8000-000000000001", "currency_code": "USD", "tax_enabled": false, "tax_rate": 0.00, "status": "issued", "created_at": "2025-08-01T10:15:00Z" },
+      { "id": "d0000000-0000-4000-8000-000000000002", "appointment_id": "b0000000-0000-4000-8000-000000000002", "currency_code": "USD", "tax_enabled": false, "tax_rate": 0.00, "status": "issued", "created_at": "2025-08-02T12:45:00Z" }
+    ],
+    "invoice_items": [
+      { "id": "e0000000-0000-4000-8000-000000000001", "invoice_id": "d0000000-0000-4000-8000-000000000001", "service_id": null, "description": "Initial consultation", "quantity": 1, "unit_price": 250.00, "taxable": false, "created_at": "2025-08-01T10:16:00Z", "updated_at": "2025-08-01T10:16:00Z" },
+      { "id": "e0000000-0000-4000-8000-000000000002", "invoice_id": "d0000000-0000-4000-8000-000000000002", "service_id": null, "description": "Dressing change", "quantity": 3, "unit_price": 45.00, "taxable": false, "created_at": "2025-08-02T12:46:00Z", "updated_at": "2025-08-02T12:46:00Z" }
+    ],
+    "payments": [
+      { "id": "f0000000-0000-4000-8000-000000000020", "invoice_id": "d0000000-0000-4000-8000-000000000002", "amount": 25.00, "method": "cash", "reference": "CASH-0802", "received_at": "2025-08-02T13:00:00Z", "created_at": "2025-08-02T13:00:00Z", "updated_at": "2025-08-02T13:00:00Z" }
+    ]
+  },
+  "expected_after_seed": {
+    "d0000000-0000-4000-8000-000000000001": { "subtotal": 250.00, "tax_amount": 0.00, "total": 250.00, "paid_amount": 0.00, "status": "issued" },
+    "d0000000-0000-4000-8000-000000000002": { "subtotal": 135.00, "tax_amount": 0.00, "total": 135.00, "paid_amount": 25.00, "status": "issued" }
+  },
+  "legacy_inputs": {
+    "export_invoices": [
+      {
+        "id": "d0000000-0000-4000-8000-000000000001",
+        "created_at": "2025-08-01T10:15:00Z",
+        "total": 250,
+        "tax_amount": 0,
+        "subtotal": 250,
+        "currency_code": "USD",
+        "status": "issued",
+        "appointment": { "patient": { "first_name": "Maya", "last_name": "Example", "email": "maya.example@example.com" } },
+        "invoice_items": [
+          { "description": "Initial consultation", "quantity": 1, "unit_price": 250, "line_total": 250, "taxable": false }
+        ]
+      },
+      {
+        "id": "d0000000-0000-4000-8000-000000000002",
+        "created_at": "2025-08-02T12:45:00Z",
+        "total": 135,
+        "tax_amount": 0,
+        "subtotal": 135,
+        "currency_code": "USD",
+        "status": "issued",
+        "appointment": { "patient": { "first_name": "Carl", "last_name": "Sample", "email": "carl.sample@example.com" } },
+        "invoice_items": [
+          { "description": "Dressing change", "quantity": 3, "unit_price": 45, "line_total": 135, "taxable": false }
+        ]
+      }
+    ],
+    "invoice_emails": [
+      {
+        "id": "d0000000-0000-4000-8000-000000000001",
+        "total": 250,
+        "paid_amount": 0,
+        "currency_code": "USD",
+        "created_at": "2025-08-01T10:15:00Z",
+        "status": "issued",
+        "subtotal": 250,
+        "tax_amount": 0,
+        "tax_enabled": false,
+        "tax_rate": 0,
+        "appointment": {
+          "scheduled_start": "2025-08-01T09:30:00Z",
+          "reason": "Routine consultation",
+          "patient": { "first_name": "Maya", "last_name": "Example", "email": "maya.example@example.com", "phone": "+15555550122", "address": "7 St Clair Avenue" }
+        },
+        "invoice_items": [
+          { "description": "Initial consultation", "quantity": 1, "unit_price": 250, "line_total": 250, "service": null }
+        ]
+      },
+      {
+        "id": "d0000000-0000-4000-8000-000000000002",
+        "total": 135,
+        "paid_amount": 25,
+        "currency_code": "USD",
+        "created_at": "2025-08-02T12:45:00Z",
+        "status": "issued",
+        "subtotal": 135,
+        "tax_amount": 0,
+        "tax_enabled": false,
+        "tax_rate": 0,
+        "appointment": {
+          "scheduled_start": "2025-08-02T11:00:00Z",
+          "reason": "Suture removal",
+          "patient": { "first_name": "Carl", "last_name": "Sample", "email": "carl.sample@example.com", "phone": "+15555550129", "address": "22 Laventille Road" }
+        },
+        "invoice_items": [
+          { "description": "Dressing change", "quantity": 3, "unit_price": 45, "line_total": 135, "service": null }
+        ]
+      }
+    ]
+  },
+  "contract": {
+    "invoices_csv": "byte-identical to buildInvoicesCsv(legacy_inputs.export_invoices, request) (W54): header line, the Date cells 8/1/2025 and 8/2/2025, one row per item, the numerics as PostgREST JSON numbers (250, 45, 135, 3), the Taxable cell N unquoted, the tax cells 0, and the Currency cell the quoted \"USD\" the shipped row array wrote.",
+    "invoice_email": "byte-identical to buildInvoiceHtml(legacy_inputs.invoice_emails[i]) and to invoiceEmailSubject(...) (W56 no-special-characters case); no Tax row (tax_enabled false), Outstanding 250.00 / 110.00.",
+    "seeding": "line_total, subtotal, tax_amount, total and paid_amount/status follow from the schema triggers; the values above are what they compute, so the seed block omits them on the invoices and computes the items' line amounts from quantity x unit_price."
+  }
+}
