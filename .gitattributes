@@ -1,0 +1,12 @@
+# Normalise to LF in the repository and working tree (shell scripts, SQL
+# migrations and Docker files must have LF line endings even on Windows).
+* text=auto eol=lf
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.webp binary
+*.woff binary
+*.woff2 binary
+*.pdf binary
