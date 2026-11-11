@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 import { apiSendInvoiceEmail, apiSendReceiptEmail } from "@/lib/api";
+import { useFeatures } from "@/hooks/useFeatures";
 import { useToast } from "@/hooks/use-toast";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -16,6 +17,7 @@ import { Separator } from "@/components/ui/separator";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { useAuth } from "@/hooks/useAuth";
 import { Navigation } from "@/components/Navigation";
+import { AppFooter } from "@/components/AppFooter";
 import { InvoiceView } from "@/components/InvoiceView";
 import { ReceiptView } from "@/components/ReceiptView";
 import { Eye, Printer, Mail, Plus } from "lucide-react";
@@ -46,7 +48,10 @@ export default function Billing() {
   );
 
   const { toast } = useToast();
-  const { signOut } = useAuth();
+
+  // E-mail is optional (features.email); the buttons stay visible but disabled.
+
+  const emailEnabled = useFeatures().email;
   const qc = useQueryClient();
   const [selectedInvoiceId, setSelectedInvoiceId] = useState<string>("");
   const [paymentAmount, setPaymentAmount] = useState("");
@@ -436,7 +441,7 @@ export default function Billing() {
                           {unpaidInvoices.map((inv) => (
                             <SelectItem key={inv.id} value={inv.id}>
                               {inv.appointment?.patient?.first_name} {inv.appointment?.patient?.last_name} - 
-                              {inv.currency_code} ${(inv.total - inv.paid_amount).toFixed(2)} outstanding
+                              {formatMoney((inv.total - inv.paid_amount), inv.currency_code)} outstanding
                             </SelectItem>
                           ))}
                         </SelectContent>
@@ -507,10 +512,10 @@ export default function Billing() {
                   <CardContent>
                     <div className="flex justify-between items-center">
                       <div>
-                        <div className="text-sm text-muted-foreground">Total: {invoice.currency_code} ${invoice.total.toFixed(2)}</div>
-                        <div className="text-sm text-muted-foreground">Paid: {invoice.currency_code} ${invoice.paid_amount.toFixed(2)}</div>
+                        <div className="text-sm text-muted-foreground">Total: {formatMoney(invoice.total, invoice.currency_code)}</div>
+                        <div className="text-sm text-muted-foreground">Paid: {formatMoney(invoice.paid_amount, invoice.currency_code)}</div>
                         <div className="font-semibold text-red-600">
-                          Outstanding: {invoice.currency_code} ${(invoice.total - invoice.paid_amount).toFixed(2)}
+                          Outstanding: {formatMoney((invoice.total - invoice.paid_amount), invoice.currency_code)}
                         </div>
                       </div>
                     </div>
@@ -534,6 +539,8 @@ export default function Billing() {
                       <Button 
                         variant="outline" 
                         size="sm"
+                        disabled={!emailEnabled}
+                        title={emailEnabled ? undefined : "E-mail is not enabled on this server"}
                         onClick={() => {
                           setSelectedEmailInvoiceId(invoice.id);
                           setEmailRecipient(invoice.appointment?.patient?.email || "");
@@ -576,9 +583,9 @@ export default function Billing() {
                   <CardContent>
                     <div className="flex justify-between items-center">
                       <div>
-                        <div className="text-sm text-muted-foreground">Total: {invoice.currency_code} ${invoice.total.toFixed(2)}</div>
+                        <div className="text-sm text-muted-foreground">Total: {formatMoney(invoice.total, invoice.currency_code)}</div>
                         <div className="font-semibold text-green-600">
-                          Paid: {invoice.currency_code} ${invoice.paid_amount.toFixed(2)}
+                          Paid: {formatMoney(invoice.paid_amount, invoice.currency_code)}
                         </div>
                       </div>
                       </div>
@@ -602,6 +609,8 @@ export default function Billing() {
                       <Button 
                         variant="outline" 
                         size="sm"
+                        disabled={!emailEnabled}
+                        title={emailEnabled ? undefined : "E-mail is not enabled on this server"}
                         onClick={() => {
                           setSelectedEmailInvoiceId(invoice.id);
                           setEmailRecipient(invoice.appointment?.patient?.email || "");
@@ -645,7 +654,7 @@ export default function Billing() {
                   <CardContent>
                     <div className="flex justify-between items-center">
                       <div>
-                        <div className="font-semibold">{currency} ${payment.amount.toFixed(2)}</div>
+                        <div className="font-semibold">{formatMoney(payment.amount, currency)}</div>
                         {payment.reference && (
                           <div className="text-sm text-muted-foreground">Ref: {payment.reference}</div>
                         )}
@@ -662,6 +671,8 @@ export default function Billing() {
                         <Button
                           variant="outline"
                           size="sm"
+                          disabled={!emailEnabled}
+                          title={emailEnabled ? undefined : "E-mail is not enabled on this server"}
                           onClick={() => {
                             setSelectedReceiptPaymentId(payment.id);
                             setReceiptEmailDialogOpen(true);
@@ -727,7 +738,7 @@ export default function Billing() {
                   type="email"
                   value={emailRecipient}
                   onChange={(e) => setEmailRecipient(e.target.value)}
-                  placeholder="patient@example.com"
+                  placeholder="patient@example.test"
                 />
               </div>
               <div className="flex gap-2">
@@ -771,7 +782,7 @@ export default function Billing() {
                   type="email"
                   value={receiptEmailRecipient}
                   onChange={(e) => setReceiptEmailRecipient(e.target.value)}
-                  placeholder="patient@example.com"
+                  placeholder="patient@example.test"
                 />
               </div>
               <div className="flex gap-2">
@@ -800,6 +811,7 @@ export default function Billing() {
           </DialogContent>
         </Dialog>
       </main>
+      <AppFooter />
     </div>
   );
 }

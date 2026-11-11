@@ -13,6 +13,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "@/hooks/useAuth";
 import { Navigation } from "@/components/Navigation";
+import { AppFooter } from "@/components/AppFooter";
 
 function useMeta(title: string, description: string, canonical: string) {
   useEffect(() => {
@@ -61,6 +62,7 @@ export default function Intake() {
     national_id: "",
     drivers_permit: "",
     reason: "",
+    intake_notes: "",
   });
 
   const debounced = useMemo(() => search.trim(), [search]);
@@ -139,6 +141,7 @@ export default function Intake() {
         status,
         reason: form.reason,
         customer_type: customerType,
+        intake_notes: form.intake_notes || null,
       });
       if (ae) throw ae;
     },
@@ -267,6 +270,12 @@ export default function Intake() {
               </div>
 
               <div>
+                <Label htmlFor="intake_notes">Intake Notes (Optional)</Label>
+                <Textarea id="intake_notes" placeholder="Additional notes from intake..." value={form.intake_notes} onChange={(e) => setForm({ ...form, intake_notes: e.target.value })} rows={3} />
+                <p className="text-xs text-muted-foreground mt-1">These notes will be available during the visit and in patient history</p>
+              </div>
+
+              <div>
                 <Label>Customer Type *</Label>
                 <div className="flex gap-2">
                   <Button type="button" variant={customerType === "walk-in" ? "default" : "outline"} onClick={() => setCustomerType("walk-in")}>Walk-in</Button>
@@ -297,6 +306,7 @@ export default function Intake() {
           </Card>
         </div>
       </main>
+      <AppFooter />
     </div>
   );
 }

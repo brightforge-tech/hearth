@@ -23,6 +23,12 @@ export interface User {
   email?: string;
   roles?: string[];
   created_at?: string;
+  /** true while an admin-set or temporary password must be replaced; every
+   *  API call but the session/change-password/logout routes answers 403
+   *  PASSWORD_CHANGE_REQUIRED until it is. */
+  must_change_password?: boolean;
+  /** the "Doctor" tag of user_roles (GET /api/auth/session reports it). */
+  is_doctor?: boolean;
 }
 
 /** A browser-held session: the bearer token the API signed (api/lib/tokens.mjs)

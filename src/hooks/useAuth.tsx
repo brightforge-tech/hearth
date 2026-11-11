@@ -7,6 +7,10 @@ interface AuthContextType {
   session: Session | null;
   loading: boolean;
   userRoles: string[];
+  /** the "Doctor" tag (user_roles.is_doctor) */
+  isDoctor: boolean;
+  /** true while the account must replace its password (/change-password) */
+  mustChangePassword: boolean;
   hasRole: (role: string) => boolean;
   signOut: () => Promise<void>;
 }
@@ -18,62 +22,76 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [session, setSession] = useState<Session | null>(null);
   const [loading, setLoading] = useState(true);
   const [userRoles, setUserRoles] = useState<string[]>([]);
+  const [isDoctor, setIsDoctor] = useState(false);
 
   useEffect(() => {
+    // Roles and the doctor tag: the session route reports both (roles also
+    // come with the login answer). Only what is missing is read from
+    // user_roles — and never while a password change is pending, since every
+    // other API call answers 403 PASSWORD_CHANGE_REQUIRED until then.
+    const fetchUserRoles = async (sessionUser: User) => {
+      const knownRoles = Array.isArray(sessionUser.roles) ? sessionUser.roles : null;
+      const knownDoctor = typeof sessionUser.is_doctor === "boolean" ? sessionUser.is_doctor : null;
+      if (knownRoles) setUserRoles(knownRoles);
+      if (knownDoctor !== null) setIsDoctor(knownDoctor);
+      if ((knownRoles && knownDoctor !== null) || sessionUser.must_change_password) return;
+      try {
+        const { data, error } = await supabase
+          .from("user_roles")
+          .select("role, is_doctor")
+          .eq("user_id", sessionUser.id);
+
+        if (error) throw error;
+        if (!knownRoles) setUserRoles(data?.map((r: { role: string }) => r.role) || []);
+        if (knownDoctor === null) setIsDoctor(data?.some((r: { is_doctor?: boolean }) => r.is_doctor) || false);
+      } catch (err) {
+        console.error("Error fetching user roles:", err);
+        if (!knownRoles) setUserRoles([]);
+        if (knownDoctor === null) setIsDoctor(false);
+      }
+    };
+
+    const apply = (next: Session | null) => {
+      setSession(next);
+      setUser(next?.user ?? null);
+      if (next?.user) {
+        const sessionUser = next.user;
+        // Defer role fetch to avoid recursion
+        setTimeout(() => {
+          fetchUserRoles(sessionUser);
+        }, 0);
+      } else {
+        setUserRoles([]);
+        setIsDoctor(false);
+      }
+    };
+
     // Set up auth state listener FIRST
     const { data: { subscription } } = supabase.auth.onAuthStateChange(
-      (event, session) => {
-        setSession(session);
-        setUser(session?.user ?? null);
-        
-        // Defer role fetch to avoid recursion
-        if (session?.user) {
-          setTimeout(() => {
-            fetchUserRoles(session.user.id);
-          }, 0);
-        } else {
-          setUserRoles([]);
-        }
+      (_event, next) => {
+        apply(next);
         setLoading(false);
       }
     );
 
     // THEN check for existing session
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      setSession(session);
-      setUser(session?.user ?? null);
-      if (session?.user) {
-        fetchUserRoles(session.user.id);
-      }
+    supabase.auth.getSession().then(({ data: { session: initial } }) => {
+      apply(initial);
       setLoading(false);
     });
 
     return () => subscription.unsubscribe();
   }, []);
 
-  const fetchUserRoles = async (userId: string) => {
-    try {
-      const { data, error } = await supabase
-        .from("user_roles")
-        .select("role")
-        .eq("user_id", userId);
-      
-      if (error) throw error;
-      setUserRoles(data?.map(r => r.role) || []);
-    } catch (err) {
-      console.error("Error fetching user roles:", err);
-      setUserRoles([]);
-    }
-  };
-
   const hasRole = (role: string) => userRoles.includes(role);
+  const mustChangePassword = user?.must_change_password === true;
 
   const signOut = async () => {
     await supabase.auth.signOut();
   };
 
   return (
-    <AuthContext.Provider value={{ user, session, loading, userRoles, hasRole, signOut }}>
+    <AuthContext.Provider value={{ user, session, loading, userRoles, isDoctor, mustChangePassword, hasRole, signOut }}>
       {children}
     </AuthContext.Provider>
   );

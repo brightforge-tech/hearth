@@ -7,7 +7,7 @@ export type Json =
   | Json[]
 
 export type Database = {
-  // Allows to automatically instanciate createClient with right options
+  // Allows to automatically instantiate createClient with right options
   // instead of createClient<Database, { PostgrestVersion: 'XX' }>(URL, KEY)
   __InternalSupabase: {
     PostgrestVersion: "13.0.4"
@@ -20,6 +20,7 @@ export type Database = {
           customer_type: string
           duration_minutes: number | null
           id: string
+          intake_notes: string | null
           patient_id: string
           reason: string | null
           scheduled_end: string | null
@@ -32,6 +33,7 @@ export type Database = {
           customer_type?: string
           duration_minutes?: number | null
           id?: string
+          intake_notes?: string | null
           patient_id: string
           reason?: string | null
           scheduled_end?: string | null
@@ -44,6 +46,7 @@ export type Database = {
           customer_type?: string
           duration_minutes?: number | null
           id?: string
+          intake_notes?: string | null
           patient_id?: string
           reason?: string | null
           scheduled_end?: string | null
@@ -60,6 +63,63 @@ export type Database = {
             referencedColumns: ["id"]
           },
         ]
+      }
+      booking_requests: {
+        Row: {
+          appointment_id: string | null
+          created_at: string
+          date_of_birth: string | null
+          decline_reason: string | null
+          email: string | null
+          first_name: string
+          id: string
+          last_name: string
+          patient_id: string | null
+          phone: string | null
+          preferred_date: string
+          preferred_time: string
+          reason: string
+          reviewed_at: string | null
+          reviewed_by: string | null
+          status: string
+        }
+        Insert: {
+          appointment_id?: string | null
+          created_at?: string
+          date_of_birth?: string | null
+          decline_reason?: string | null
+          email?: string | null
+          first_name: string
+          id?: string
+          last_name: string
+          patient_id?: string | null
+          phone?: string | null
+          preferred_date: string
+          preferred_time: string
+          reason: string
+          reviewed_at?: string | null
+          reviewed_by?: string | null
+          status?: string
+        }
+        Update: {
+          appointment_id?: string | null
+          created_at?: string
+          date_of_birth?: string | null
+          decline_reason?: string | null
+          email?: string | null
+          first_name?: string
+          id?: string
+          last_name?: string
+          patient_id?: string | null
+          phone?: string | null
+          preferred_date?: string
+          preferred_time?: string
+          reason?: string
+          reviewed_at?: string | null
+          reviewed_by?: string | null
+          status?: string
+        }
+        Relationships: []
       }
       clinic_settings: {
         Row: {
@@ -97,6 +157,42 @@ export type Database = {
           tax_rate?: number
           updated_at?: string
           working_hours?: Json
+        }
+        Relationships: []
+      }
+      expenses: {
+        Row: {
+          amount: number
+          category: string
+          created_at: string
+          description: string
+          expense_date: string
+          id: string
+          notes: string | null
+          reference: string | null
+          updated_at: string
+        }
+        Insert: {
+          amount: number
+          category: string
+          created_at?: string
+          description: string
+          expense_date?: string
+          id?: string
+          notes?: string | null
+          reference?: string | null
+          updated_at?: string
+        }
+        Update: {
+          amount?: number
+          category?: string
+          created_at?: string
+          description?: string
+          expense_date?: string
+          id?: string
+          notes?: string | null
+          reference?: string | null
+          updated_at?: string
         }
         Relationships: []
       }
@@ -336,18 +432,21 @@ export type Database = {
         Row: {
           created_at: string
           id: string
+          is_doctor: boolean
           role: Database["public"]["Enums"]["app_role"]
           user_id: string
         }
         Insert: {
           created_at?: string
           id?: string
+          is_doctor?: boolean
           role: Database["public"]["Enums"]["app_role"]
           user_id: string
         }
         Update: {
           created_at?: string
           id?: string
+          is_doctor?: boolean
           role?: Database["public"]["Enums"]["app_role"]
           user_id?: string
         }
@@ -396,20 +495,35 @@ export type Database = {
       [_ in never]: never
     }
     Functions: {
+      admin_update_user_role: {
+        Args: {
+          new_is_doctor?: boolean
+          new_role: Database["public"]["Enums"]["app_role"]
+          target_user_id: string
+        }
+        Returns: undefined
+      }
       get_users_with_roles: {
         Args: Record<PropertyKey, never>
         Returns: {
-          user_id: string
-          email: string
           created_at: string
+          email: string
+          is_doctor: boolean
+          last_login_at: string | null
+          must_change_password: boolean
           role: string
+          user_id: string
         }[]
       }
       has_role: {
         Args: {
-          _user_id: string
           _role: Database["public"]["Enums"]["app_role"]
+          _user_id: string
         }
+        Returns: boolean
+      }
+      is_doctor: {
+        Args: { _user_id: string }
         Returns: boolean
       }
       recalc_invoice_payments: {

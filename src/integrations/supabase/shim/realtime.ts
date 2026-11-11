@@ -66,6 +66,8 @@ const STREAMED_TABLES = Object.freeze([
   'patients',
   'visit_notes',
   'user_roles',
+  'expenses',
+  'booking_requests',
 ]);
 
 const compare = (left: unknown, op: string, right: string): boolean => {

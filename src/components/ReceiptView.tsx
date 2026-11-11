@@ -1,4 +1,5 @@
 import React from "react";
+import { formatMoney } from "@/lib/currency";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
@@ -146,12 +147,12 @@ export function ReceiptView({ payment, invoice, patient, isPrintMode = false }: 
               
               <div className="flex justify-between">
                 <span>Invoice Total:</span>
-                <span>{invoice.currency_code} ${invoice.total.toFixed(2)}</span>
+                <span>{formatMoney(invoice.total, invoice.currency_code)}</span>
               </div>
               
               <div className="flex justify-between font-semibold text-lg">
                 <span>Amount Paid:</span>
-                <span>{invoice.currency_code} ${payment.amount.toFixed(2)}</span>
+                <span>{formatMoney(payment.amount, invoice.currency_code)}</span>
               </div>
             </div>
           </div>

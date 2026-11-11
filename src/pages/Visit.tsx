@@ -1,5 +1,5 @@
 import { BRAND } from "@/lib/brand";
-import { useClinicCurrency, formatMoney, DEFAULT_CURRENCY } from "@/lib/currency";
+import { useClinicCurrency, formatMoney } from "@/lib/currency";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
@@ -16,6 +16,7 @@ import { Check, ChevronsUpDown, Plus } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useToast } from "@/hooks/use-toast";
 import { Navigation } from "@/components/Navigation";
+import { AppFooter } from "@/components/AppFooter";
 
 function useMeta(title: string, description: string, canonical: string) {
   useEffect(() => {
@@ -61,6 +62,7 @@ export default function Visit() {
   const isDrawingRef = useRef(false);
   const [hasSignature, setHasSignature] = useState(false);
   const [notes, setNotes] = useState("");
+  const [intakeNotes, setIntakeNotes] = useState("");
   const [qty, setQty] = useState<Record<string, number>>({});
   const [selectedServices, setSelectedServices] = useState<Array<{id: string, name: string, price: number, taxable: boolean}>>([]);
   const [comboboxOpen, setComboboxOpen] = useState(false);
@@ -70,7 +72,7 @@ export default function Visit() {
     queryFn: async () => {
       const { data, error } = await supabase
         .from("appointments")
-        .select("id, status, scheduled_start, patient:patients(first_name,last_name)")
+        .select("id, status, scheduled_start, reason, intake_notes, patient:patients(first_name,last_name)")
         .eq("id", id)
         .maybeSingle();
       if (error) throw error;
@@ -80,20 +82,12 @@ export default function Visit() {
     retry: 3,
   });
 
-  // Show error if appointment not found
-  if (apptQuery.isError) {
-    return (
-      <div className="min-h-screen bg-background flex items-center justify-center">
-        <div className="text-center">
-          <h1 className="text-2xl font-bold mb-2">Visit Not Found</h1>
-          <p className="text-muted-foreground mb-4">The requested appointment could not be found.</p>
-          <Button asChild>
-            <a href="/queue">Return to Queue</a>
-          </Button>
-        </div>
-      </div>
-    );
-  }
+  // Load intake notes when appointment loads
+  useEffect(() => {
+    if (apptQuery.data?.intake_notes) {
+      setIntakeNotes(apptQuery.data.intake_notes);
+    }
+  }, [apptQuery.data]);
 
   const servicesQuery = useQuery({
     queryKey: ["services"],
@@ -277,6 +271,23 @@ export default function Visit() {
     onError: (e: any) => toast({ title: "Error", description: e?.message || "Could not save notes.", variant: "destructive" as any }),
   });
 
+  const saveIntakeNotes = useMutation({
+    mutationFn: async () => {
+      if (!id) throw new Error("Missing appointment id");
+      
+      const { error } = await supabase
+        .from("appointments")
+        .update({ intake_notes: intakeNotes || null })
+        .eq("id", id);
+      if (error) throw error;
+    },
+    onSuccess: () => {
+      toast({ title: "Intake notes saved", description: "Intake notes have been updated." });
+      queryClient.invalidateQueries({ queryKey: ["appointment", id] });
+    },
+    onError: (e: any) => toast({ title: "Error", description: e?.message || "Could not save intake notes.", variant: "destructive" as any }),
+  });
+
   const generateInvoice = useMutation({
     mutationFn: async () => {
       if (!id) throw new Error("Missing appointment id");
@@ -371,6 +382,21 @@ export default function Visit() {
     !selectedServices.find(selected => selected.id === service.id)
   ) || [];
 
+  // Show error (after every hook: rules of hooks) if appointment not found
+  if (apptQuery.isError) {
+    return (
+      <div className="min-h-screen bg-background flex items-center justify-center">
+        <div className="text-center">
+          <h1 className="text-2xl font-bold mb-2">Visit Not Found</h1>
+          <p className="text-muted-foreground mb-4">The requested appointment could not be found.</p>
+          <Button asChild>
+            <a href="/queue">Return to Queue</a>
+          </Button>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="min-h-screen bg-background">
       <Navigation currentPage="/visit" />
@@ -396,41 +422,73 @@ export default function Visit() {
         </section>
 
         <div className="grid lg:grid-cols-2 gap-6">
-          <Card>
-            <CardHeader>
-              <CardTitle>Clinical Notes</CardTitle>
-              <CardDescription>Enter notes and capture signature</CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              <div>
-                <Label htmlFor="notes">Notes</Label>
-                <Textarea id="notes" rows={8} value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="SOAP or free text…" />
-              </div>
-              <div>
-                <Label>Signature</Label>
-                <div className="border rounded-md p-2 bg-white">
-                  <canvas
-                    ref={notesCanvasRef}
-                    className="w-full h-[200px] rounded-sm border border-gray-200 bg-white touch-none"
-                    onMouseDown={startDraw}
-                    onMouseMove={draw}
-                    onMouseUp={endDraw}
-                    onMouseLeave={endDraw}
-                    onTouchStart={startDraw}
-                    onTouchMove={draw}
-                    onTouchEnd={endDraw}
-                    style={{ touchAction: 'none' }}
-                  />
-                  <div className="mt-2 flex gap-2">
-                    <Button variant="outline" onClick={clearSignature}>Clear</Button>
-                    <Button onClick={() => saveNotes.mutate()} disabled={saveNotes.isPending}>
-                      {saveNotes.isPending ? "Saving…" : "Save Notes"}
-                    </Button>
+          <div className="space-y-6">
+            {/* Intake Notes Card - Only show if there are intake notes */}
+            {(apptQuery.data?.intake_notes || intakeNotes) && (
+              <Card>
+                <CardHeader>
+                  <CardTitle>Intake Notes</CardTitle>
+                  <CardDescription>Notes from patient intake</CardDescription>
+                </CardHeader>
+                <CardContent className="space-y-4">
+                  <div>
+                    <Label htmlFor="intake-notes">Intake Notes</Label>
+                    <Textarea 
+                      id="intake-notes" 
+                      rows={4} 
+                      value={intakeNotes} 
+                      onChange={(e) => setIntakeNotes(e.target.value)} 
+                      placeholder="Notes from intake..." 
+                    />
+                  </div>
+                  <Button 
+                    variant="outline" 
+                    onClick={() => saveIntakeNotes.mutate()} 
+                    disabled={saveIntakeNotes.isPending}
+                  >
+                    {saveIntakeNotes.isPending ? "Saving…" : "Update Intake Notes"}
+                  </Button>
+                </CardContent>
+              </Card>
+            )}
+
+            {/* Clinical Notes Card */}
+            <Card>
+              <CardHeader>
+                <CardTitle>Clinical Notes</CardTitle>
+                <CardDescription>Enter notes and capture signature</CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <div>
+                  <Label htmlFor="notes">Notes</Label>
+                  <Textarea id="notes" rows={8} value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="SOAP or free text…" />
+                </div>
+                <div>
+                  <Label>Signature</Label>
+                  <div className="border rounded-md p-2 bg-white">
+                    <canvas
+                      ref={notesCanvasRef}
+                      className="w-full h-[200px] rounded-sm border border-gray-200 bg-white touch-none"
+                      onMouseDown={startDraw}
+                      onMouseMove={draw}
+                      onMouseUp={endDraw}
+                      onMouseLeave={endDraw}
+                      onTouchStart={startDraw}
+                      onTouchMove={draw}
+                      onTouchEnd={endDraw}
+                      style={{ touchAction: 'none' }}
+                    />
+                    <div className="mt-2 flex gap-2">
+                      <Button variant="outline" onClick={clearSignature}>Clear</Button>
+                      <Button onClick={() => saveNotes.mutate()} disabled={saveNotes.isPending}>
+                        {saveNotes.isPending ? "Saving…" : "Save Notes"}
+                      </Button>
+                    </div>
                   </div>
                 </div>
-              </div>
-            </CardContent>
-          </Card>
+              </CardContent>
+            </Card>
+          </div>
 
           <Card>
             <CardHeader>
@@ -472,7 +530,7 @@ export default function Visit() {
                               <div className="flex flex-col flex-1">
                                 <div className="font-medium">{service.name}</div>
                                 <div className="text-xs text-muted-foreground">
-                                  {currency} ${Number(service.price).toFixed(2)}{service.taxable ? " • taxable" : ""}
+                                  {formatMoney(Number(service.price), currency)}{service.taxable ? " • taxable" : ""}
                                 </div>
                               </div>
                               <Check
@@ -497,7 +555,7 @@ export default function Visit() {
                     <div className="flex-1">
                       <div className="font-medium">{service.name}</div>
                       <div className="text-xs text-muted-foreground">
-                        {currency} ${Number(service.price).toFixed(2)}{service.taxable ? " • taxable" : ""}
+                        {formatMoney(Number(service.price), currency)}{service.taxable ? " • taxable" : ""}
                       </div>
                     </div>
                     <div className="flex items-center gap-2">
@@ -525,7 +583,7 @@ export default function Visit() {
               <Separator />
               <div className="flex items-center justify-between">
                 <div className="text-sm text-muted-foreground">Estimated subtotal</div>
-                <div className="font-semibold">{currency} ${totalEstimate.toFixed(2)}</div>
+                <div className="font-semibold">{formatMoney(totalEstimate, currency)}</div>
               </div>
               <div>
                 <Button onClick={() => generateInvoice.mutate()} disabled={generateInvoice.isPending}>
@@ -536,6 +594,7 @@ export default function Visit() {
           </Card>
         </div>
       </main>
+      <AppFooter />
     </div>
   );
 }

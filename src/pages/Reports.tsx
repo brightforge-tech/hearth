@@ -1,32 +1,16 @@
-import { useAuth } from "@/hooks/useAuth";
+import { Navigation } from "@/components/Navigation";
+import { AppFooter } from "@/components/AppFooter";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { TodaysSchedule } from "@/components/reports/TodaysSchedule";
 import { RevenueSummary } from "@/components/reports/RevenueSummary";
 import { UnpaidAging } from "@/components/reports/UnpaidAging";
-import { CalendarDays, DollarSign, Clock, BarChart3 } from "lucide-react";
+import { CalendarDays, DollarSign, Clock } from "lucide-react";
 
 const Reports = () => {
-  const { signOut } = useAuth();
-
   return (
     <div className="min-h-screen bg-background">
-      <header className="border-b">
-        <nav className="container mx-auto px-4 py-3 flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <BarChart3 className="h-6 w-6 text-primary" />
-            <h1 className="text-xl font-semibold">Reports</h1>
-          </div>
-          <div className="flex gap-2">
-            <a href="/dashboard" className="underline underline-offset-4">Dashboard</a>
-            <a href="/intake" className="underline underline-offset-4">Intake</a>
-            <a href="/queue" className="underline underline-offset-4">Queue</a>
-            <a href="/billing" className="underline underline-offset-4">Billing</a>
-            <a href="/exports" className="underline underline-offset-4">Exports</a>
-            <button onClick={() => signOut()} className="underline underline-offset-4">Sign Out</button>
-          </div>
-        </nav>
-      </header>
+      <Navigation currentPage="/reports" />
 
       <main className="container mx-auto px-4 py-6">
         <div className="mb-6">
@@ -95,6 +79,7 @@ const Reports = () => {
           </TabsContent>
         </Tabs>
       </main>
+      <AppFooter />
     </div>
   );
 };

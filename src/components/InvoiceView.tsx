@@ -1,4 +1,5 @@
 import { BRAND } from "@/lib/brand";
+import { formatMoney } from "@/lib/currency";
 import React from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -160,8 +161,8 @@ export function InvoiceView({ invoice, isPrintMode = false }: InvoiceViewProps) 
                   <tr key={index} className="border-b">
                     <td className="py-2 px-4">{item.service?.name || item.description}</td>
                     <td className="text-center py-2 px-4">{item.quantity}</td>
-                    <td className="text-right py-2 px-4">{invoice.currency_code} ${item.unit_price.toFixed(2)}</td>
-                    <td className="text-right py-2 px-4">{invoice.currency_code} ${item.line_total.toFixed(2)}</td>
+                    <td className="text-right py-2 px-4">{formatMoney(item.unit_price, invoice.currency_code)}</td>
+                    <td className="text-right py-2 px-4">{formatMoney(item.line_total, invoice.currency_code)}</td>
                   </tr>
                 )) || (
                   <tr>
@@ -182,26 +183,26 @@ export function InvoiceView({ invoice, isPrintMode = false }: InvoiceViewProps) 
               <div className="space-y-2">
                 <div className="flex justify-between">
                   <span>Subtotal:</span>
-                  <span>{invoice.currency_code} ${invoice.subtotal.toFixed(2)}</span>
+                  <span>{formatMoney(invoice.subtotal, invoice.currency_code)}</span>
                 </div>
                 {invoice.tax_enabled && (
                   <div className="flex justify-between">
                     <span>Tax ({invoice.tax_rate}%):</span>
-                    <span>{invoice.currency_code} ${invoice.tax_amount.toFixed(2)}</span>
+                    <span>{formatMoney(invoice.tax_amount, invoice.currency_code)}</span>
                   </div>
                 )}
                 <div className="flex justify-between font-bold text-lg border-t pt-2">
                   <span>Total:</span>
-                  <span>{invoice.currency_code} ${invoice.total.toFixed(2)}</span>
+                  <span>{formatMoney(invoice.total, invoice.currency_code)}</span>
                 </div>
                 <div className="flex justify-between">
                   <span>Paid:</span>
-                  <span>{invoice.currency_code} ${invoice.paid_amount.toFixed(2)}</span>
+                  <span>{formatMoney(invoice.paid_amount, invoice.currency_code)}</span>
                 </div>
                 <div className="flex justify-between font-bold text-lg border-t pt-2">
                   <span>Outstanding:</span>
                   <span className={invoice.total - invoice.paid_amount > 0 ? "text-red-600" : "text-green-600"}>
-                    {invoice.currency_code} ${(invoice.total - invoice.paid_amount).toFixed(2)}
+                    {formatMoney((invoice.total - invoice.paid_amount), invoice.currency_code)}
                   </span>
                 </div>
               </div>

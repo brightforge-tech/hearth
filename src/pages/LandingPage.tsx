@@ -15,6 +15,24 @@ import { Logo } from "@/components/Logo";
 import {LogoFooter} from "@/components/LogoFooter";
 import { Calendar, Clock, MapPin, Phone, Mail, Heart, Shield, Users, Award, TestTube, UserCheck, Stethoscope, Syringe, Scan } from "lucide-react";
 import { Link } from "react-router-dom";
+import { format, addDays } from "date-fns";
+import { apiSubmitBookingRequest } from "@/lib/api";
+import { PRODUCT } from "@/lib/brand";
+
+// Field limits of POST /api/public/booking-requests.
+const LIMITS = { name: 100, email: 254, phone: 40, reason: 1000 } as const;
+const SUCCESS_MESSAGE = "Request received — the clinic will contact you to confirm";
+
+const EMPTY_FORM = {
+  first_name: "",
+  last_name: "",
+  email: "",
+  phone: "",
+  date_of_birth: "",
+  reason: "",
+  preferred_date: "",
+  preferred_time: "",
+};
 
 function useMeta(title: string, description: string, canonical: string) {
   useEffect(() => {
@@ -42,16 +60,13 @@ export default function LandingPage() {
 
   const { toast } = useToast();
   const [showBooking, setShowBooking] = useState(false);
-  const [formData, setFormData] = useState({
-    first_name: "",
-    last_name: "",
-    email: "",
-    phone: "",
-    date_of_birth: "",
-    reason: "",
-    preferred_date: "",
-    preferred_time: ""
-  });
+  const [formData, setFormData] = useState(EMPTY_FORM);
+  // Honeypot: a field people never see. Bots that fill it are dropped by the
+  // server; we always send it as typed (normally empty).
+  const [website, setWebsite] = useState("");
+  const [submitted, setSubmitted] = useState(false);
+  const minDate = format(new Date(), "yyyy-MM-dd");
+  const maxDate = format(addDays(new Date(), 365), "yyyy-MM-dd");
 
   const servicesQuery = useQuery({
     queryKey: ["public-services"],
@@ -68,61 +83,47 @@ export default function LandingPage() {
   });
 
   const bookAppointment = useMutation({
-    mutationFn: async (data: any) => {
-      // Create patient first
-      const { data: patient, error: patientError } = await supabase
-        .from("patients")
-        .insert({
-          first_name: data.first_name,
-          last_name: data.last_name,
-          email: data.email,
-          phone: data.phone,
-          date_of_birth: data.date_of_birth || null,
-        })
-        .select()
-        .single();
-
-      if (patientError) throw patientError;
-
-      // Create appointment
-      const appointmentDate = new Date(`${data.preferred_date}T${data.preferred_time}`);
-      const { error: appointmentError } = await supabase
-        .from("appointments")
-        .insert({
-          patient_id: patient.id,
-          reason: data.reason,
-          scheduled_start: appointmentDate.toISOString(),
-          status: "scheduled",
-          customer_type: "appointment"
-        });
-
-      if (appointmentError) throw appointmentError;
+    mutationFn: async (data: typeof EMPTY_FORM) => {
+      const email = data.email.trim();
+      const phone = data.phone.trim();
+      if (!email && !phone) throw new Error("Please give an email address or a phone number so we can reach you.");
+      if (!data.preferred_time) throw new Error("Please select a preferred time.");
+      if (data.preferred_date < minDate || data.preferred_date > maxDate) {
+        throw new Error("Please choose a date within the next 12 months.");
+      }
+      // A request only: the clinic reviews it and creates the appointment.
+      await apiSubmitBookingRequest({
+        first_name: data.first_name.trim(),
+        last_name: data.last_name.trim(),
+        ...(email ? { email } : {}),
+        ...(phone ? { phone } : {}),
+        ...(data.date_of_birth ? { date_of_birth: data.date_of_birth } : {}),
+        reason: data.reason.trim(),
+        preferred_date: data.preferred_date,
+        preferred_time: data.preferred_time,
+        website,
+      });
     },
     onSuccess: () => {
-      toast({ 
-        title: "Appointment Requested", 
-        description: "We'll contact you shortly to confirm your appointment time." 
-      });
-      setShowBooking(false);
-      setFormData({
-        first_name: "",
-        last_name: "",
-        email: "",
-        phone: "",
-        date_of_birth: "",
-        reason: "",
-        preferred_date: "",
-        preferred_time: ""
-      });
+      toast({ title: "Request received", description: SUCCESS_MESSAGE });
+      setSubmitted(true);
+      setFormData(EMPTY_FORM);
     },
     onError: (error: any) => {
-      toast({ 
-        title: "Booking Error", 
-        description: error.message || "Please try again or call us directly.",
+      toast({
+        title: "Booking Error",
+        description: error?.status === 429
+          ? "Too many requests. Please try again later or call us directly."
+          : error?.message || "Please try again or call us directly.",
         variant: "destructive"
       });
     },
   });
+
+  const openBooking = () => {
+    setSubmitted(false);
+    setShowBooking(true);
+  };
 
   return (
     <div className="min-h-screen bg-background">
@@ -137,13 +138,13 @@ export default function LandingPage() {
             <Button variant="outline" asChild>
               <Link to="/auth">Staff Login</Link>
             </Button>
-            <Button onClick={() => setShowBooking(true)}>Book Appointment</Button>
+            <Button onClick={() => openBooking()}>Book Appointment</Button>
           </div>
         </nav>
       </header>
 
       {/* Hero Section */}
-      <section 
+      <section
         className="py-20 bg-cover bg-center bg-no-repeat relative"
         style={{ backgroundImage: "linear-gradient(135deg, #0f3d3e 0%, #0e7490 55%, #134e4a 100%)" }}
       >
@@ -154,11 +155,11 @@ export default function LandingPage() {
               Your Health, Our Priority
             </h1>
             <p className="text-xl text-white/90 mb-8 leading-relaxed">
-              Experience compassionate, professional healthcare at {BRAND.name}. 
+              Experience compassionate, professional healthcare at {BRAND.name}.
               We're dedicated to providing comprehensive medical services with a personal touch.
             </p>
             <div className="flex flex-col sm:flex-row gap-4 justify-center">
-              <Button size="lg" onClick={() => setShowBooking(true)} className="text-lg px-8 py-6">
+              <Button size="lg" onClick={() => openBooking()} className="text-lg px-8 py-6">
                 Book Your Appointment
               </Button>
               <Button variant="outline" size="lg" className="text-lg px-8 py-6">
@@ -179,7 +180,7 @@ export default function LandingPage() {
           <div className="absolute bottom-20 left-1/4 w-12 h-12 rounded-full bg-primary/10"></div>
           <div className="absolute bottom-32 right-1/3 w-24 h-24 rounded-full bg-primary/20"></div>
         </div>
-        
+
         <div className="container mx-auto px-4 relative z-10">
           <div className="text-center mb-16">
             <div className="inline-block px-4 py-2 rounded-full bg-primary/10 text-primary text-sm font-medium mb-4">
@@ -192,28 +193,28 @@ export default function LandingPage() {
               We offer a comprehensive range of medical services to meet all your healthcare needs with compassionate, professional care
             </p>
           </div>
-          
+
           <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-8">
             {servicesQuery.data?.map((service, index) => {
               const serviceIcons = {
                 "Blood Test": TestTube,
-                "Follow-up Visit": UserCheck, 
+                "Follow-up Visit": UserCheck,
                 "Initial Consultation": Stethoscope,
                 "Injection": Syringe,
                 "X-Ray": Scan
               };
-              
+
               const IconComponent = serviceIcons[service.name as keyof typeof serviceIcons] || Heart;
-              
+
               return (
-                <Card 
-                  key={service.id} 
+                <Card
+                  key={service.id}
                   className="group relative overflow-hidden border-0 shadow-lg hover:shadow-2xl transition-all duration-300 hover:-translate-y-2 bg-white/80 backdrop-blur-sm animate-fade-in"
                   style={{ animationDelay: `${index * 0.1}s` }}
                 >
                   {/* Gradient overlay */}
                   <div className="absolute inset-0 bg-gradient-to-br from-primary/5 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300"></div>
-                  
+
                   <CardHeader className="relative z-10 pb-4">
                     <div className="flex items-center justify-between mb-3">
                       <div className="p-3 rounded-xl bg-gradient-to-br from-primary/10 to-primary/5 group-hover:from-primary/20 group-hover:to-primary/10 transition-all duration-300">
@@ -227,13 +228,13 @@ export default function LandingPage() {
                       {service.name}
                     </CardTitle>
                   </CardHeader>
-                  
+
                   <CardContent className="relative z-10 pt-0">
                     <p className="text-muted-foreground mb-6 leading-relaxed">
                       {service.description || "Professional medical service tailored to your health needs with expert care and attention"}
                     </p>
-                    <Button 
-                      onClick={() => setShowBooking(true)}
+                    <Button
+                      onClick={() => openBooking()}
                       className="w-full bg-gradient-to-r from-primary to-primary/90 hover:from-primary/90 hover:to-primary text-white font-medium py-2.5 rounded-lg transition-all duration-300 hover:shadow-lg hover:shadow-primary/25"
                     >
                       Book Appointment
@@ -243,7 +244,7 @@ export default function LandingPage() {
               );
             })}
           </div>
-          
+
           {/* Call to Action */}
           {/*}
           <div className="text-center mt-16">
@@ -251,9 +252,9 @@ export default function LandingPage() {
               <Shield className="h-4 w-4" />
               <span>All services performed by licensed medical professionals</span>
             </div>
-            <Button 
-              size="lg" 
-              onClick={() => setShowBooking(true)}
+            <Button
+              size="lg"
+              onClick={() => openBooking()}
               className="bg-gradient-to-r from-primary to-primary/90 hover:from-primary/90 hover:to-primary text-white px-8 py-3 text-lg font-medium rounded-lg transition-all duration-300 hover:shadow-lg hover:shadow-primary/25"
             >
               Schedule Your Visit Today
@@ -326,10 +327,15 @@ export default function LandingPage() {
             &copy; {new Date().getFullYear()} {BRAND.name}. All rights reserved.
           </p>
           <div className="flex justify-center gap-6">
-            <a href="#" className="text-white/80 hover:text-white transition-colors">Privacy Policy</a>
-            <a href="#" className="text-white/80 hover:text-white transition-colors">Terms of Service</a>
             <Link to="/auth" className="text-white/80 hover:text-white transition-colors">Staff Login</Link>
           </div>
+          <p className="text-white/70 text-xs mt-4">
+            Powered by{" "}
+            <a href={PRODUCT.url} target="_blank" rel="noopener noreferrer" className="underline underline-offset-2 hover:text-white">
+              {PRODUCT.name}
+            </a>{" "}
+            (open source) · Not a medical device
+          </p>
         </div>
       </footer>
 
@@ -341,6 +347,12 @@ export default function LandingPage() {
             <DialogDescription>Fill out the form below and we'll contact you to confirm your appointment.</DialogDescription>
           </DialogHeader>
 
+          {submitted ? (
+            <div className="space-y-4 text-center py-6">
+              <p className="text-lg font-medium" role="status">{SUCCESS_MESSAGE}</p>
+              <Button onClick={() => setShowBooking(false)}>Close</Button>
+            </div>
+          ) : (
           <form
             onSubmit={(e) => {
               e.preventDefault();
@@ -348,6 +360,22 @@ export default function LandingPage() {
             }}
             className="space-y-4"
           >
+            {/* Honeypot: hidden from people and assistive technology. */}
+            <div
+              aria-hidden="true"
+              style={{ position: "absolute", left: "-10000px", top: "auto", width: "1px", height: "1px", overflow: "hidden" }}
+            >
+              <label htmlFor="website">Website</label>
+              <input
+                id="website"
+                name="website"
+                type="text"
+                tabIndex={-1}
+                autoComplete="off"
+                value={website}
+                onChange={(e) => setWebsite(e.target.value)}
+              />
+            </div>
             <div className="grid grid-cols-2 gap-4">
               <div>
                 <Label htmlFor="first_name">First Name</Label>
@@ -355,6 +383,8 @@ export default function LandingPage() {
                   id="first_name"
                   value={formData.first_name}
                   onChange={(e) => setFormData({ ...formData, first_name: e.target.value })}
+                  maxLength={LIMITS.name}
+                  autoComplete="given-name"
                   required
                 />
               </div>
@@ -364,6 +394,8 @@ export default function LandingPage() {
                   id="last_name"
                   value={formData.last_name}
                   onChange={(e) => setFormData({ ...formData, last_name: e.target.value })}
+                  maxLength={LIMITS.name}
+                  autoComplete="family-name"
                   required
                 />
               </div>
@@ -377,18 +409,33 @@ export default function LandingPage() {
                   type="email"
                   value={formData.email}
                   onChange={(e) => setFormData({ ...formData, email: e.target.value })}
-                  required
+                  maxLength={LIMITS.email}
+                  autoComplete="email"
                 />
               </div>
               <div>
                 <Label htmlFor="phone">Phone</Label>
                 <Input
                   id="phone"
+                  type="tel"
                   value={formData.phone}
                   onChange={(e) => setFormData({ ...formData, phone: e.target.value })}
-                  required
+                  maxLength={LIMITS.phone}
+                  autoComplete="tel"
                 />
               </div>
+            </div>
+            <p className="text-xs text-muted-foreground -mt-2">Please give an email address or a phone number (or both).</p>
+
+            <div>
+              <Label htmlFor="date_of_birth">Date of Birth (optional)</Label>
+              <Input
+                id="date_of_birth"
+                type="date"
+                value={formData.date_of_birth}
+                max={minDate}
+                onChange={(e) => setFormData({ ...formData, date_of_birth: e.target.value })}
+              />
             </div>
 
             <div>
@@ -398,6 +445,7 @@ export default function LandingPage() {
                 value={formData.reason}
                 onChange={(e) => setFormData({ ...formData, reason: e.target.value })}
                 placeholder="Brief description of your health concern or type of appointment needed"
+                maxLength={LIMITS.reason}
                 required
               />
             </div>
@@ -410,7 +458,8 @@ export default function LandingPage() {
                   type="date"
                   value={formData.preferred_date}
                   onChange={(e) => setFormData({ ...formData, preferred_date: e.target.value })}
-                  min={new Date().toISOString().split('T')[0]}
+                  min={minDate}
+                  max={maxDate}
                   required
                 />
               </div>
@@ -420,7 +469,7 @@ export default function LandingPage() {
                   value={formData.preferred_time}
                   onValueChange={(value) => setFormData({ ...formData, preferred_time: value })}
                 >
-                  <SelectTrigger>
+                  <SelectTrigger id="preferred_time">
                     <SelectValue placeholder="Select time" />
                   </SelectTrigger>
                   <SelectContent>
@@ -436,9 +485,10 @@ export default function LandingPage() {
             </div>
 
             <Button type="submit" className="w-full" disabled={bookAppointment.isPending}>
-              {bookAppointment.isPending ? "Booking..." : "Request Appointment"}
+              {bookAppointment.isPending ? "Sending..." : "Request Appointment"}
             </Button>
           </form>
+          )}
         </DialogContent>
       </Dialog>
     </div>

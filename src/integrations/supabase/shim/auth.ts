@@ -31,6 +31,36 @@ import { PostgrestError } from './types.ts';
 /** localStorage's key for the persisted session. */
 export const SESSION_STORAGE_KEY = 'hh.session';
 
+/** sessionStorage key for a one-shot notice the sign-in page shows (e.g.
+ *  "Your session expired") after the app dropped a dead session. */
+export const AUTH_NOTICE_KEY = 'hh.auth-notice';
+
+/** Leave a one-shot notice for the sign-in page; never throws. */
+export function setAuthNotice(message: string | null): void {
+  try {
+    const store = (globalThis as { sessionStorage?: Storage }).sessionStorage;
+    if (!store) return;
+    if (message) store.setItem(AUTH_NOTICE_KEY, message);
+    else store.removeItem(AUTH_NOTICE_KEY);
+  } catch {
+    /* storage unavailable: the notice is only a convenience */
+  }
+}
+
+/** Read and clear the one-shot notice. */
+export function takeAuthNotice(): string | null {
+  try {
+    const store = (globalThis as { sessionStorage?: Storage }).sessionStorage;
+    const value = store?.getItem(AUTH_NOTICE_KEY) ?? null;
+    if (value) store?.removeItem(AUTH_NOTICE_KEY);
+    return value;
+  } catch {
+    return null;
+  }
+}
+
+export const SESSION_EXPIRED_NOTICE = 'Your session expired. Please sign in again.';
+
 /** The auth events onAuthStateChange reports: the same names the old client
  *  used, so any code switched on them keeps its vocabulary. */
 export type AuthEvent = 'SIGNED_IN' | 'SIGNED_OUT' | 'INITIAL_SESSION' | 'TOKEN_REFRESHED';
@@ -48,6 +78,10 @@ export interface AuthClient {
   }): Promise<AuthSessionFullResponse>;
   signOut(): Promise<{ error: AuthError | null }>;
   onAuthStateChange(callback: AuthStateCallback): AuthSubscriptionResponse;
+  /** Store the session from a login-shaped answer (POST /api/auth/login or
+   *  /api/auth/change-password, which issues a NEW token) and tell the
+   *  listeners (TOKEN_REFRESHED). Returns the stored session. */
+  setSessionFromLogin(payload: { access_token: string; user?: User; expires_in?: number } & Record<string, unknown>): Session;
   admin: {
     createUser(credentials: {
       email: string;
@@ -209,6 +243,8 @@ export function createAuthClient({
             const body = (await response.json().catch(() => null)) as { user?: User } | null;
             stored = set({ ...stored, user: body?.user ?? stored.user });
           } else if (response.status === 401 || response.status === 403) {
+            const body = (await response.json().catch(() => null)) as { error?: { code?: string } } | null;
+            if (body?.error?.code === 'SESSION_EXPIRED') setAuthNotice(SESSION_EXPIRED_NOTICE);
             stored = set(null);
           }
           // any other status (a fault): keep the stored session; a query that
@@ -282,6 +318,23 @@ export function createAuthClient({
           },
         },
       };
+    },
+
+    setSessionFromLogin(payload): Session {
+      const previous = current();
+      const fresh = sessionFrom(payload as never);
+      // the change-password answer carries the user too; keep what we knew
+      // (e.g. is_doctor from the session route) where the new body is silent.
+      if (fresh.user && previous?.user && previous.user.id === fresh.user.id) {
+        fresh.user = { ...previous.user, ...fresh.user };
+      }
+      const mustChange = payload.must_change_password;
+      if (fresh.user && typeof mustChange === 'boolean') {
+        fresh.user = { ...fresh.user, must_change_password: mustChange };
+      }
+      set(fresh);
+      emit('TOKEN_REFRESHED', fresh);
+      return fresh;
     },
 
     admin: {

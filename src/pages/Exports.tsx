@@ -14,7 +14,8 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Badge } from "@/components/ui/badge";
 import { Download, FileText, DollarSign } from "lucide-react";
 import { useAuth } from "@/hooks/useAuth";
-import { Logo } from "@/components/Logo";
+import { Navigation } from "@/components/Navigation";
+import { AppFooter } from "@/components/AppFooter";
 
 function useMeta(title: string, description: string, canonical: string) {
   useEffect(() => {
@@ -42,7 +43,6 @@ export default function Exports() {
   );
 
   const { toast } = useToast();
-  const { signOut } = useAuth();
   const [startDate, setStartDate] = useState("");
   const [endDate, setEndDate] = useState("");
   const [exportType, setExportType] = useState<"invoices" | "payments">("invoices");
@@ -147,18 +147,7 @@ export default function Exports() {
 
   return (
     <div className="min-h-screen bg-background">
-      <header className="border-b">
-        <nav className="container mx-auto px-4 py-3 flex items-center justify-between">
-          <Logo />
-          <div className="flex gap-2">
-            <Button variant="ghost" asChild><a href="/intake">Intake</a></Button>
-            <Button variant="ghost" asChild><a href="/queue">Queue</a></Button>
-            <Button variant="ghost" asChild><a href="/billing">Billing</a></Button>
-            <Button variant="ghost" asChild><a href="/exports">Exports</a></Button>
-            <Button variant="outline" onClick={() => signOut()}>Sign Out</Button>
-          </div>
-        </nav>
-      </header>
+      <Navigation currentPage="/exports" />
 
       <main className="container mx-auto px-4 py-6">
         <section className="mb-6">
@@ -208,8 +197,9 @@ export default function Exports() {
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="invoices">Invoices</SelectItem>
-                      <SelectItem value="payments">Payments</SelectItem>
+                  <SelectItem value="invoices">Invoices</SelectItem>
+                  <SelectItem value="payments">Payments</SelectItem>
+                  <SelectItem value="expenses">Expenses</SelectItem>
                     </SelectContent>
                   </Select>
                 </div>
@@ -250,7 +240,7 @@ export default function Exports() {
                     </div>
                     <div className="flex justify-between items-center">
                       <span className="text-sm">Invoice Total:</span>
-                      <span className="font-medium">{currency} ${statsQuery.data.totalInvoiceAmount.toFixed(2)}</span>
+                      <span className="font-medium">{formatMoney(statsQuery.data.totalInvoiceAmount, currency)}</span>
                     </div>
                     <div className="flex justify-between items-center">
                       <span className="text-sm">Total Payments:</span>
@@ -258,7 +248,7 @@ export default function Exports() {
                     </div>
                     <div className="flex justify-between items-center">
                       <span className="text-sm">Payment Total:</span>
-                      <span className="font-medium">{currency} ${statsQuery.data.totalPaymentAmount.toFixed(2)}</span>
+                      <span className="font-medium">{formatMoney(statsQuery.data.totalPaymentAmount, currency)}</span>
                     </div>
                   </>
                 )}
@@ -281,6 +271,7 @@ export default function Exports() {
           </div>
         </div>
       </main>
+      <AppFooter />
     </div>
   );
 }

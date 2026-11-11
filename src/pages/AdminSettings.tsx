@@ -2,7 +2,6 @@ import { BRAND } from "@/lib/brand";
 import { useEffect, useState, useMemo } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
-import { useToast } from "@/hooks/use-toast";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -14,7 +13,13 @@ import { useAuth } from "@/hooks/useAuth";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Badge } from "@/components/ui/badge";
 import { Search, Calendar, User } from "lucide-react";
-import { Logo } from "@/components/Logo";
+import { Navigation } from "@/components/Navigation";
+import { AppFooter } from "@/components/AppFooter";
+import { PasswordRules } from "@/components/PasswordRules";
+import { passwordProblem } from "@/lib/passwordRules";
+import { apiAdminResetPassword } from "@/lib/api";
+import { PRODUCT } from "@/lib/brand";
+import { useToast } from "@/hooks/use-toast";
 
 function useMeta(title: string, description: string, canonical: string) {
   useEffect(() => {
@@ -33,6 +38,12 @@ function useMeta(title: string, description: string, canonical: string) {
   }, [title, description, canonical]);
 }
 
+const ROLE_LABELS: Record<string, string> = {
+  admin: "Administrator",
+  moderator: "Billing / Front office",
+  user: "Clinical staff",
+};
+
 export default function AdminSettings() {
   useMeta(
     `Admin Settings | ${BRAND.name}`,
@@ -41,7 +52,7 @@ export default function AdminSettings() {
   );
 
   const { toast } = useToast();
-  const { signOut } = useAuth();
+  const { user: currentUser } = useAuth();
   const qc = useQueryClient();
 
   const settingsQuery = useQuery({
@@ -79,6 +90,9 @@ export default function AdminSettings() {
         email: string;
         created_at: string;
         role: "admin" | "moderator" | "user";
+        is_doctor: boolean;
+        must_change_password?: boolean;
+        last_login_at?: string | null;
       }>;
     },
   });
@@ -91,9 +105,9 @@ export default function AdminSettings() {
         .select(`
           *,
           appointments(
-            id, 
-            reason, 
-            status, 
+            id,
+            reason,
+            status,
             scheduled_start,
             visit_notes(notes)
           )
@@ -243,6 +257,8 @@ export default function AdminSettings() {
 
   const addUser = useMutation({
     mutationFn: async (data: { email: string; password: string; role: "user" | "admin" | "moderator" }) => {
+      const problem = passwordProblem(data.password, data.email);
+      if (problem) throw new Error(problem);
       const { data: authData, error: authError } = await supabase.auth.admin.createUser({
         email: data.email,
         password: data.password,
@@ -258,7 +274,7 @@ export default function AdminSettings() {
       }
     },
     onSuccess: () => {
-      toast({ title: "User added", description: "New user created successfully." });
+      toast({ title: "User added", description: "New user created. They must choose a new password at first sign-in." });
       qc.invalidateQueries({ queryKey: ["users-admin"] });
       setNewUser({ email: "", password: "", role: "user" });
     },
@@ -268,21 +284,15 @@ export default function AdminSettings() {
   });
 
   const updateUserRole = useMutation({
-    mutationFn: async ({ userId, newRole }: { userId: string; newRole: "user" | "admin" | "moderator" }) => {
-      // First delete any existing roles for this user
-      const { error: deleteError } = await supabase
-        .from("user_roles")
-        .delete()
-        .eq("user_id", userId);
-      
-      if (deleteError) throw deleteError;
-      
-      // Then insert the new role
-      const { error: insertError } = await supabase
-        .from("user_roles")
-        .insert({ user_id: userId, role: newRole });
-        
-      if (insertError) throw insertError;
+    mutationFn: async ({ userId, newRole, isDoctor }: { userId: string; newRole: "user" | "admin" | "moderator"; isDoctor?: boolean }) => {
+      // admin_update_user_role replaces the user's roles with this one role
+      // plus the doctor flag, server-side.
+      const { error } = await supabase.rpc('admin_update_user_role', {
+        target_user_id: userId,
+        new_role: newRole,
+        new_is_doctor: isDoctor || false
+      });
+      if (error) throw error;
     },
     onSuccess: () => {
       toast({ title: "Role updated", description: "User role changed successfully." });
@@ -292,6 +302,36 @@ export default function AdminSettings() {
       toast({ title: "Error", description: e?.message || "Failed to update role.", variant: "destructive" as any });
     },
   });
+
+  // One-time display of a temporary password after an admin reset.
+  const [tempPassword, setTempPassword] = useState<{ email: string; password: string } | null>(null);
+  const [resetTarget, setResetTarget] = useState<{ user_id: string; email: string } | null>(null);
+
+  const resetPassword = useMutation({
+    mutationFn: async (target: { user_id: string; email: string }) => {
+      const result = await apiAdminResetPassword(target.user_id);
+      return { email: target.email, password: result.temporary_password };
+    },
+    onSuccess: (result) => {
+      setResetTarget(null);
+      setTempPassword(result);
+      qc.invalidateQueries({ queryKey: ["users-admin"] });
+    },
+    onError: (e: any) => {
+      setResetTarget(null);
+      toast({ title: "Error", description: e?.message || "Failed to reset the password.", variant: "destructive" as any });
+    },
+  });
+
+  const copyTempPassword = async () => {
+    if (!tempPassword) return;
+    try {
+      await navigator.clipboard.writeText(tempPassword.password);
+      toast({ title: "Copied", description: "Temporary password copied to the clipboard." });
+    } catch {
+      toast({ title: "Copy failed", description: "Select the password and copy it by hand.", variant: "destructive" as any });
+    }
+  };
 
   const [newService, setNewService] = useState({
     code: "",
@@ -337,13 +377,13 @@ export default function AdminSettings() {
   // Filter and search patients
   const filteredPatients = useMemo(() => {
     if (!patientsQuery.data) return [];
-    
+
     let filtered = patientsQuery.data;
-    
+
     // Apply search filter
     if (patientSearch) {
       const search = patientSearch.toLowerCase();
-      filtered = filtered.filter(patient => 
+      filtered = filtered.filter(patient =>
         patient.first_name?.toLowerCase().includes(search) ||
         patient.last_name?.toLowerCase().includes(search) ||
         patient.email?.toLowerCase().includes(search) ||
@@ -351,44 +391,44 @@ export default function AdminSettings() {
         patient.national_id?.includes(search)
       );
     }
-    
+
     // Apply category filter
     if (patientFilter === "recent_visits") {
-      filtered = filtered.filter(patient => 
-        patient.appointments?.some((apt: any) => 
+      filtered = filtered.filter(patient =>
+        patient.appointments?.some((apt: any) =>
           new Date(apt.scheduled_start) > new Date(Date.now() - 30 * 24 * 60 * 60 * 1000) // Last 30 days
         )
       );
     } else if (patientFilter === "has_issues") {
-      filtered = filtered.filter(patient => 
-        patient.appointments?.some((apt: any) => 
-          apt.reason && apt.reason.toLowerCase().includes("pain") || 
+      filtered = filtered.filter(patient =>
+        patient.appointments?.some((apt: any) =>
+          apt.reason && apt.reason.toLowerCase().includes("pain") ||
           apt.reason && apt.reason.toLowerCase().includes("issue") ||
           apt.visit_notes?.some((note: any) => note.notes && note.notes.length > 50)
         )
       );
     }
-    
+
     return filtered;
   }, [patientsQuery.data, patientSearch, patientFilter]);
 
   // Get common issues from appointment reasons
   const commonIssues = useMemo(() => {
     if (!patientsQuery.data) return [];
-    
+
     const reasons: string[] = [];
     patientsQuery.data.forEach(patient => {
       patient.appointments?.forEach((apt: any) => {
         if (apt.reason) reasons.push(apt.reason);
       });
     });
-    
+
     // Count occurrences and return top 5
     const reasonCounts: Record<string, number> = {};
     reasons.forEach(reason => {
       reasonCounts[reason] = (reasonCounts[reason] || 0) + 1;
     });
-    
+
     return Object.entries(reasonCounts)
       .sort(([,a], [,b]) => b - a)
       .slice(0, 5)
@@ -397,17 +437,7 @@ export default function AdminSettings() {
 
   return (
     <div className="min-h-screen bg-background">
-      <header className="border-b">
-        <nav className="container mx-auto px-4 py-3 flex items-center justify-between">
-          <Logo />
-          <div className="flex gap-2">
-            <Button variant="ghost" asChild><a href="/intake">Intake</a></Button>
-            <Button variant="ghost" asChild><a href="/queue">Queue</a></Button>
-            <Button variant="ghost" asChild><a href="/admin/settings">Settings</a></Button>
-            <Button variant="outline" onClick={() => signOut()}>Sign Out</Button>
-          </div>
-        </nav>
-      </header>
+      <Navigation currentPage="/admin/settings" />
 
       <main className="container mx-auto px-4 py-6">
         <section className="mb-6">
@@ -422,6 +452,7 @@ export default function AdminSettings() {
             <TabsTrigger value="patients">Patient Management</TabsTrigger>
             <TabsTrigger value="users">User Management</TabsTrigger>
             <TabsTrigger value="hours">Working Hours</TabsTrigger>
+            <TabsTrigger value="about">About</TabsTrigger>
           </TabsList>
 
           <TabsContent value="settings" className="space-y-6">
@@ -750,8 +781,8 @@ export default function AdminSettings() {
                       <div className="flex justify-between">
                         <span>Recent Visits (30d):</span>
                         <span className="font-medium">
-                          {patientsQuery.data?.filter(p => 
-                            p.appointments?.some((apt: any) => 
+                          {patientsQuery.data?.filter(p =>
+                            p.appointments?.some((apt: any) =>
                               new Date(apt.scheduled_start) > new Date(Date.now() - 30 * 24 * 60 * 60 * 1000)
                             )
                           ).length || 0}
@@ -760,7 +791,7 @@ export default function AdminSettings() {
                       <div className="flex justify-between">
                         <span>With Recorded Issues:</span>
                         <span className="font-medium">
-                          {patientsQuery.data?.filter(p => 
+                          {patientsQuery.data?.filter(p =>
                             p.appointments?.some((apt: any) => apt.reason)
                           ).length || 0}
                         </span>
@@ -1002,6 +1033,7 @@ export default function AdminSettings() {
                     <Input
                       id="new-password"
                       type="password"
+                      autoComplete="new-password"
                       value={newUser.password}
                       onChange={(e) => setNewUser({ ...newUser, password: e.target.value })}
                       required
@@ -1014,11 +1046,17 @@ export default function AdminSettings() {
                         <SelectValue />
                       </SelectTrigger>
                       <SelectContent>
-                        <SelectItem value="user">User</SelectItem>
-                        <SelectItem value="admin">Admin</SelectItem>
-                        <SelectItem value="moderator">Moderator</SelectItem>
+                        <SelectItem value="user">Clinical staff</SelectItem>
+                        <SelectItem value="moderator">Billing / Front office</SelectItem>
+                        <SelectItem value="admin">Administrator</SelectItem>
                       </SelectContent>
                     </Select>
+                  </div>
+                  <div className="md:col-span-3">
+                    <PasswordRules className="mb-1" />
+                    <p className="text-xs text-muted-foreground">
+                      The new user must choose their own password at first sign-in.
+                    </p>
                   </div>
                   <div className="md:col-span-3">
                     <Button type="submit" disabled={addUser.isPending}>
@@ -1032,7 +1070,7 @@ export default function AdminSettings() {
             <Card>
               <CardHeader>
                 <CardTitle>User Management</CardTitle>
-                <CardDescription>View all users and manage their roles</CardDescription>
+                <CardDescription>View all users, manage their roles, and assign doctor privileges</CardDescription>
               </CardHeader>
               <CardContent>
                 {usersQuery.isLoading ? (
@@ -1045,47 +1083,89 @@ export default function AdminSettings() {
                   </div>
                 ) : (
                   <div className="space-y-4">
-                    {usersQuery.data?.map((user) => (
-                      <div key={user.user_id} className="border rounded-lg p-4">
-                        <div className="flex items-center justify-between">
-                          <div className="space-y-1">
-                            <div className="flex items-center gap-2">
-                              <p className="font-medium">{user.email}</p>
-                              <Badge variant={user.role === 'admin' ? 'default' : user.role === 'moderator' ? 'secondary' : 'outline'}>
-                                {user.role}
-                              </Badge>
-                            </div>
-                            <p className="text-sm text-muted-foreground">
-                              Created: {new Date(user.created_at).toLocaleDateString()}
-                            </p>
-                            <p className="text-xs text-muted-foreground">
-                              ID: {user.user_id}
-                            </p>
-                          </div>
-                          <div className="flex items-center gap-2">
-                            <Label htmlFor={`role-${user.user_id}`} className="text-sm">
-                              Change Role:
-                            </Label>
-                            <Select
-                              value={user.role}
-                              onValueChange={(newRole: "user" | "admin" | "moderator") => {
-                                if (newRole !== user.role) {
-                                  updateUserRole.mutate({ userId: user.user_id, newRole });
-                                }
-                              }}
-                            >
-                              <SelectTrigger className="w-36" id={`role-${user.user_id}`}>
-                                <SelectValue />
-                              </SelectTrigger>
-                              <SelectContent>
-                                <SelectItem value="user">User</SelectItem>
-                                <SelectItem value="moderator">Moderator</SelectItem>
-                                <SelectItem value="admin">Admin</SelectItem>
-                              </SelectContent>
-                            </Select>
-                          </div>
-                        </div>
-                      </div>
+                     {usersQuery.data?.map((user) => (
+                       <div key={user.user_id} className="border rounded-lg p-4">
+                         <div className="flex flex-wrap items-center justify-between gap-4">
+                           <div className="space-y-1">
+                             <div className="flex flex-wrap items-center gap-2">
+                               <p className="font-medium">{user.email}</p>
+                               <Badge variant={user.role === 'admin' ? 'default' : user.role === 'moderator' ? 'secondary' : 'outline'}>
+                                 {ROLE_LABELS[user.role] ?? user.role}
+                               </Badge>
+                               {user.is_doctor && (
+                                 <Badge variant="destructive" className="text-xs">
+                                   Doctor
+                                 </Badge>
+                               )}
+                               {user.must_change_password && (
+                                 <Badge variant="outline" className="text-xs">
+                                   Password change pending
+                                 </Badge>
+                               )}
+                             </div>
+                             <p className="text-sm text-muted-foreground">
+                               Created: {new Date(user.created_at).toLocaleDateString()}
+                               {" · "}Last sign-in: {user.last_login_at ? new Date(user.last_login_at).toLocaleString() : "never"}
+                             </p>
+                             <p className="text-xs text-muted-foreground">
+                               ID: {user.user_id}
+                             </p>
+                           </div>
+                           <div className="flex flex-wrap items-center gap-4">
+                             <div className="flex items-center gap-2">
+                               <Label htmlFor={`role-${user.user_id}`} className="text-sm">
+                                 Role:
+                               </Label>
+                               <Select
+                                 value={user.role}
+                                 onValueChange={(newRole: "user" | "admin" | "moderator") => {
+                                   if (newRole !== user.role) {
+                                     updateUserRole.mutate({
+                                       userId: user.user_id,
+                                       newRole,
+                                       isDoctor: user.is_doctor
+                                     });
+                                   }
+                                 }}
+                               >
+                                 <SelectTrigger className="w-48" id={`role-${user.user_id}`}>
+                                   <SelectValue />
+                                 </SelectTrigger>
+                                 <SelectContent>
+                                   <SelectItem value="user">Clinical staff</SelectItem>
+                                   <SelectItem value="moderator">Billing / Front office</SelectItem>
+                                   <SelectItem value="admin">Administrator</SelectItem>
+                                 </SelectContent>
+                               </Select>
+                             </div>
+                             <div className="flex items-center gap-2">
+                               <Label htmlFor={`doctor-${user.user_id}`} className="text-sm">
+                                 Doctor:
+                               </Label>
+                               <Switch
+                                 id={`doctor-${user.user_id}`}
+                                 checked={user.is_doctor || false}
+                                 onCheckedChange={(isDoctor) => {
+                                   updateUserRole.mutate({
+                                     userId: user.user_id,
+                                     newRole: user.role,
+                                     isDoctor
+                                   });
+                                 }}
+                               />
+                             </div>
+                             <Button
+                               variant="outline"
+                               size="sm"
+                               disabled={resetPassword.isPending || user.user_id === currentUser?.id}
+                               title={user.user_id === currentUser?.id ? "Use Change password for your own account" : undefined}
+                               onClick={() => setResetTarget({ user_id: user.user_id, email: user.email })}
+                             >
+                               Reset password
+                             </Button>
+                           </div>
+                         </div>
+                       </div>
                     ))}
                     {usersQuery.data?.length === 0 && (
                       <div className="text-center py-8 text-muted-foreground">
@@ -1110,7 +1190,7 @@ export default function AdminSettings() {
                     onSubmit={(e) => {
                       e.preventDefault();
                       const formData = new FormData(e.currentTarget);
-                      
+
                       const workingHours = {
                         mon: {
                           enabled: formData.get("mon-enabled") === "on",
@@ -1119,7 +1199,7 @@ export default function AdminSettings() {
                         },
                         tue: {
                           enabled: formData.get("tue-enabled") === "on",
-                          start: formData.get("tue-start") || "09:00", 
+                          start: formData.get("tue-start") || "09:00",
                           end: formData.get("tue-end") || "17:00"
                         },
                         wed: {
@@ -1156,16 +1236,16 @@ export default function AdminSettings() {
                     {["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"].map((day, index) => {
                       const dayKey = day.toLowerCase().slice(0, 3);
                       const currentHours = settingsQuery.data.working_hours?.[dayKey] || { enabled: false, start: "09:00", end: "17:00" };
-                      
+
                       return (
                         <div key={day} className="border rounded-md p-4">
                           <div className="flex items-center justify-between mb-3">
                             <Label className="text-base font-medium">{day}</Label>
                             <div className="flex items-center space-x-2">
-                              <Switch 
-                                id={`${dayKey}-enabled`} 
-                                name={`${dayKey}-enabled`} 
-                                defaultChecked={currentHours.enabled} 
+                              <Switch
+                                id={`${dayKey}-enabled`}
+                                name={`${dayKey}-enabled`}
+                                defaultChecked={currentHours.enabled}
                               />
                               <Label htmlFor={`${dayKey}-enabled`}>Open</Label>
                             </div>
@@ -1173,20 +1253,20 @@ export default function AdminSettings() {
                           <div className="grid grid-cols-2 gap-4">
                             <div>
                               <Label htmlFor={`${dayKey}-start`}>Start Time</Label>
-                              <Input 
-                                id={`${dayKey}-start`} 
-                                name={`${dayKey}-start`} 
-                                type="time" 
-                                defaultValue={currentHours.start} 
+                              <Input
+                                id={`${dayKey}-start`}
+                                name={`${dayKey}-start`}
+                                type="time"
+                                defaultValue={currentHours.start}
                               />
                             </div>
                             <div>
                               <Label htmlFor={`${dayKey}-end`}>End Time</Label>
-                              <Input 
-                                id={`${dayKey}-end`} 
-                                name={`${dayKey}-end`} 
-                                type="time" 
-                                defaultValue={currentHours.end} 
+                              <Input
+                                id={`${dayKey}-end`}
+                                name={`${dayKey}-end`}
+                                type="time"
+                                defaultValue={currentHours.end}
                               />
                             </div>
                           </div>
@@ -1202,8 +1282,78 @@ export default function AdminSettings() {
               </CardContent>
             </Card>
           </TabsContent>
+          <TabsContent value="about" className="space-y-6">
+            <Card>
+              <CardHeader>
+                <CardTitle>About {PRODUCT.name}</CardTitle>
+                <CardDescription>{PRODUCT.name} by {PRODUCT.vendor}</CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-3 text-sm">
+                <p>
+                  {PRODUCT.name} is open-source clinic practice-management software by {PRODUCT.vendor}, licensed under the
+                  GNU Affero General Public License v3.0 (AGPL-3.0).
+                </p>
+                <p>
+                  <strong>Not a medical device.</strong> {PRODUCT.name} records administrative and clinical information entered
+                  by staff; it does not provide diagnosis, treatment recommendations or any other clinical decision support.
+                </p>
+                <p>
+                  The clinic operating this installation ({BRAND.name}) is the data controller for all patient and staff data
+                  stored in it, and is responsible for its lawful use, retention and security.
+                </p>
+                <p>
+                  Source code:{" "}
+                  <a href={PRODUCT.url} target="_blank" rel="noopener noreferrer" className="underline underline-offset-4">
+                    {PRODUCT.url}
+                  </a>
+                </p>
+              </CardContent>
+            </Card>
+          </TabsContent>
         </Tabs>
+
+        <Dialog open={!!resetTarget} onOpenChange={(open) => { if (!open) setResetTarget(null); }}>
+          <DialogContent className="max-w-md">
+            <DialogHeader>
+              <DialogTitle>Reset password</DialogTitle>
+              <DialogDescription>
+                Reset the password of {resetTarget?.email}? Their current sessions are signed out and they must choose a new
+                password at their next sign-in.
+              </DialogDescription>
+            </DialogHeader>
+            <div className="flex justify-end gap-2">
+              <Button variant="outline" onClick={() => setResetTarget(null)}>Cancel</Button>
+              <Button
+                variant="destructive"
+                disabled={resetPassword.isPending}
+                onClick={() => resetTarget && resetPassword.mutate(resetTarget)}
+              >
+                {resetPassword.isPending ? "Resetting..." : "Reset password"}
+              </Button>
+            </div>
+          </DialogContent>
+        </Dialog>
+
+        <Dialog open={!!tempPassword} onOpenChange={(open) => { if (!open) setTempPassword(null); }}>
+          <DialogContent className="max-w-md">
+            <DialogHeader>
+              <DialogTitle>Temporary password</DialogTitle>
+              <DialogDescription>
+                For {tempPassword?.email}. It is shown only once: copy it now and hand it over securely. The user must change
+                it at their next sign-in.
+              </DialogDescription>
+            </DialogHeader>
+            <div className="flex items-center gap-2">
+              <Input readOnly value={tempPassword?.password ?? ""} className="font-mono" onFocus={(e) => e.target.select()} aria-label="Temporary password" />
+              <Button onClick={copyTempPassword}>Copy</Button>
+            </div>
+            <div className="flex justify-end">
+              <Button variant="outline" onClick={() => setTempPassword(null)}>Done</Button>
+            </div>
+          </DialogContent>
+        </Dialog>
       </main>
+      <AppFooter />
     </div>
   );
 }
