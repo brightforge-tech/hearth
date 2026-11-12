@@ -13,7 +13,7 @@ dist-ssr
 *.local
 
 # Test output (runtime artifacts, never committed)
-reports/
+/reports/
 var/
 
 # Editor directories and files
